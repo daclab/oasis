@@ -1,0 +1,15 @@
+# Copy to config/toolchain.local.toml (gitignored) and adjust paths for your machine.
+# Only the keys you set here override config/toolchain.toml.
+
+[tools]
+circt_opt = "/path/to/circt/build/bin/circt-opt"
+circt_translate = "/path/to/circt/build/bin/circt-translate"
+hlstool = "/path/to/circt/build/bin/hlstool"
+calyx = "/path/to/.cargo/bin/calyx"
+vivado = "/path/to/Xilinx/Vivado/2023.2/bin/vivado"
+xvlog = "/path/to/Xilinx/Vivado/2023.2/bin/xvlog"
+xelab = "/path/to/Xilinx/Vivado/2023.2/bin/xelab"
+xsim = "/path/to/Xilinx/Vivado/2023.2/bin/xsim"
+
+[paths]
+calyx_lib = "/path/to/calyx"

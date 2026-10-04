@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oasis"
+version = "0.1.0"
+description = "OASIS: lower PyTorch models to synthesizable RTL via MLIR and CIRCT"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+# torch-mlir nightly is installed separately (see README): it pins its own torch nightly.
+frontend = ["torch"]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+oasis = "oasis.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["python"]
+
+[tool.setuptools.package-data]
+oasis = ["backend/templates/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# lit configs use names that lit injects (config, lit_config); build/out are generated.
+extend-exclude = ["test/lit.cfg.py", "build", "out"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["oasis"]

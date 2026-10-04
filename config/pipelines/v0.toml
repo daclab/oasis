@@ -1,0 +1,89 @@
+# OASIS v0 pipeline: ordered stages. Outputs are named <NN>_<name><ext> (ext default .mlir).
+#
+# Stage kinds:
+#   export   : PyTorch -> linalg-on-tensors via torch_mlir.fx.export_and_import
+#   frontend : MLIR pass list run by the frontend runner (see config/toolchain.toml [frontend])
+#   tool     : external backend tool (see the backend section below)
+#
+# Frontend pass names were verified against the torch-mlir wheel 20261001 (2026-10-02) by
+# parsing each one with torch_mlir.passmanager.PassManager. Re-verify when bumping the wheel.
+
+[pipeline]
+name = "v0"
+# The hand-off file (last frontend stage) may contain only ops from these dialects.
+handoff_dialects = ["builtin", "func", "scf", "memref", "arith"]
+
+[[stage]]
+name = "linalg"
+kind = "export"
+
+[[stage]]
+name = "bufferized"
+kind = "frontend"
+passes = [
+  "one-shot-bufferize{bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map}",
+  # Turn returned buffers into out-params written in place (C becomes the last argument).
+  "buffer-results-to-out-params{modify-public-functions hoist-static-allocs}",
+  "canonicalize",
+  "cse",
+]
+
+[[stage]]
+name = "affine"
+kind = "frontend"
+passes = [
+  "func.func(convert-linalg-to-affine-loops)",
+  "canonicalize",
+]
+
+[[stage]]
+name = "scf"
+kind = "frontend"
+handoff = true
+passes = [
+  "lower-affine",
+  "canonicalize",
+  "cse",
+]
+
+# ---------------------------------------------------------------------------------------
+# Backend (CIRCT's LLVM + Calyx). kind = "tool": run an external tool on the previous
+# stage's file. Placeholders: {in} {out} {top} and any key from [paths] in toolchain.toml.
+# stdout = true: the tool prints its result instead of taking -o.
+# These flags come from From-Algorithm-to-RTL/examples/*/lower.sh and worked with local
+# CIRCT a8cf045b3 on 2026-10-02.
+# TODO(verify): check against circt-opt --help / hlstool --help for the pinned version.
+
+# Flatten every memref to 1-D (hlstool needs 1-D memories). OASIS's pass, not CIRCT's
+# `flatten-memref`: CIRCT computes wrong addresses for rank >= 3 memrefs (it multiplies by
+# the product of all remaining dimensions instead of the next one), which broke every
+# NCHW tensor (e.g. relu) while 2-D gemm/ffnn happened to be correct.
+[[stage]]
+name = "scf_flat"
+kind = "tool"
+tool = "oasis_opt"
+args = ["{in}", "--oasis-flatten-memref", "--canonicalize", "--cse", "-o", "{out}"]
+
+[[stage]]
+name = "calyx"
+kind = "tool"
+tool = "hlstool"
+args = ["--calyx-hw", "--output-level=core", "--top-level-function={top}", "--ir",
+        "--allow-unregistered-dialects", "{in}", "-o", "{out}"]
+
+[[stage]]
+name = "futil"
+kind = "tool"
+tool = "circt_translate"
+ext = ".futil"
+args = ["--export-calyx", "{in}", "-o", "{out}"]
+
+# Simulation RTL: keeps $readmemh/$writememh/final for the testbench. The synthesis RTL is
+# generated separately by `oasis tb` with `calyx --synthesis`.
+[[stage]]
+name = "design"
+kind = "tool"
+tool = "calyx"
+ext = ".sv"
+stdout = true
+args = ["-l", "{calyx_lib}", "-b", "verilog", "{in}"]

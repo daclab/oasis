@@ -1,0 +1,61 @@
+# OASIS toolchain configuration.
+#
+# Resolution order for every tool and path (first hit wins):
+#   1. environment variable OASIS_<KEY_UPPERCASE>   e.g. OASIS_CIRCT_OPT=/opt/circt/bin/circt-opt
+#   2. config/toolchain.local.toml                  (gitignored, machine-specific)
+#   3. this file
+#   4. (tools only) bare executable name looked up on PATH
+#
+# Two decoupled toolchains, connected only through .mlir text files:
+#   * frontend: torch-mlir pip wheel (its own pinned LLVM)
+#   * backend:  CIRCT built with its own submodule LLVM
+
+[frontend]
+# "inprocess": run the frontend pass pipeline with torch-mlir's Python PassManager
+#              (same LLVM as the exporter; no extra build needed). Default.
+# "mlir-opt":  run it with the external `frontend_mlir_opt` tool below
+#              (an mlir-opt built at torch-mlir's pinned LLVM commit).
+runner = "inprocess"
+
+[tools]
+# Frontend (only used when [frontend].runner = "mlir-opt")
+frontend_mlir_opt = "mlir-opt"
+
+# Backend: CIRCT (its own LLVM) and the Calyx compiler
+circt_opt = "circt-opt"
+circt_translate = "circt-translate"
+hlstool = "hlstool"
+calyx = "calyx"
+# OASIS's own optimizer (C++, built against CIRCT's LLVM). Repo-relative paths are allowed.
+oasis_opt = "build/cmake/bin/oasis-opt"
+
+# Verilator >= 5 (alternative simulator). With `conda install -c conda-forge verilator`
+# it is on PATH inside the env, so the bare name resolves.
+verilator = "verilator"
+
+# Vivado (simulation with xsim, synthesis with vivado)
+vivado = "vivado"
+xvlog = "xvlog"
+xelab = "xelab"
+xsim = "xsim"
+
+[paths]
+# Calyx repository root; `calyx -l <calyx_lib>` finds primitives/ there.
+calyx_lib = "/path/to/calyx"
+
+[sim]
+# "xsim" (Vivado) or "verilator" (>= 5; much faster on large designs). `oasis tb` writes a
+# run script for every installed one; this picks the one `--sim` runs. Override per run
+# with `--simulator verilator` or OASIS_SIMULATOR=verilator.
+simulator = "xsim"
+# Stop the testbench after this many cycles (prints TIMEOUT).
+cycle_limit = 10000000
+
+[fpga]
+# Default target: AMD Alveo U55C.
+part = "xcu55c-fsvh2892-2L-e"  # accepted by Vivado 2023.2 (2026-10-02)
+clock_mhz = 200
+# Module to synthesize. "{top}" = the kernel (e.g. `forward`), whose memories are ports.
+# Synthesizing Calyx's `main` instead would keep the memories internal with no outputs but
+# `done`, so Vivado would optimise most of the design away.
+synth_top = "{top}"
