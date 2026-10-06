@@ -11,6 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from oasis.backend.fixups import drop_port_redeclarations
 from oasis.backend.testbench import fill_template
 from oasis.config import FpgaTarget, Toolchain
 from oasis.stages import StageError, run_tool
@@ -40,7 +41,10 @@ def write_xsim_script(sim_dir: Path, design_sv: Path, tc: Toolchain) -> Path:
 
 
 def generate_synth_sv(futil: Path, out_sv: Path, tc: Toolchain, log: Path) -> None:
-    """Synthesis RTL: same Calyx program, without $readmemh/$writememh/final (calyx --synthesis)."""
+    """Synthesis RTL: same Calyx program, without $readmemh/$writememh/final (calyx --synthesis).
+
+    Gets the same Vivado-compatibility fix-up as the simulation RTL.
+    """
     run_tool(
         "synth_rtl",
         tc.resolve("calyx"),
@@ -48,11 +52,17 @@ def generate_synth_sv(futil: Path, out_sv: Path, tc: Toolchain, log: Path) -> No
         out_sv,
         log,
         stdout_to_file=True,
+        unlimited_stack=True,
     )
+    fixed, _ = drop_port_redeclarations(out_sv.read_text())
+    out_sv.write_text(fixed)
 
 
 def write_synth_scripts(synth_dir: Path, design_sv: Path, top: str, tc: Toolchain) -> Path:
     """synth/{clocks.xdc, synth.tcl, run_synth.sh} for out-of-context synthesis of `top`."""
+    # Reports of an earlier run would be mistaken for results of the new design.
+    for name in ("utilization.rpt", "timing.rpt", "synth.log"):
+        (synth_dir / name).unlink(missing_ok=True)
     fpga: FpgaTarget = tc.fpga
     values = {
         "SYNTH_DIR": synth_dir,

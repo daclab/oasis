@@ -92,8 +92,8 @@ def test_compile_and_tb_generation(tmp_path):
         pytest.skip("CIRCT/Calyx tools not configured")
     out = tmp_path / "gemm"
     assert main(["compile", "gemm", "--out", str(out), "--no-tb"]) == 0
-    assert (out / "07_design.sv").exists()
-    assert (out / "04_scf_flat.mlir").exists()  # oasis-opt stage
+    assert (out / "10_design.sv").exists()
+    assert (out / "04_legalize.mlir").exists()  # oasis-opt stage
     assert not (out / "sim").exists()
     # The tb step writes the Vivado scripts, so it needs the Vivado tool paths to resolve.
     tc = load_toolchain()
@@ -126,6 +126,7 @@ def test_tb_has_no_always_ff():
 
 def _fake_vivado(monkeypatch, sim_ok: bool = True):
     """Replace the Vivado script runner: write what xsim/synthesis would produce."""
+    monkeypatch.setenv("OASIS_SIMULATOR", "xsim")  # these tests need Vivado anyway (_need_backend)
     import numpy as np
 
     from oasis.backend import memmap, vivado
@@ -184,6 +185,30 @@ def test_sim_needs_tb():
     assert main(["compile", "gemm", "--stop-after", "scf", "--synth"]) == 1
 
 
+def test_drop_port_redeclarations():
+    """Vivado rejects `wire X;` for an ANSI port X (HardFloat's divSqrtRecFN_small)."""
+    from oasis.backend.fixups import drop_port_redeclarations
+
+    sv = """module div #(parameter w = 3) (
+    input clock,
+    output sqrtOpOut,
+    output [(w - 1):0] out
+);
+    wire sqrtOpOut;
+    wire other;
+    wire [3:0] out2;
+endmodule
+module keep (input a, output b);
+    wire c;
+endmodule
+"""
+    fixed, n = drop_port_redeclarations(sv)
+    assert n == 1
+    assert "wire sqrtOpOut;" not in fixed
+    assert "wire other;" in fixed and "wire [3:0] out2;" in fixed and "wire c;" in fixed
+    assert "output sqrtOpOut," in fixed
+
+
 def test_check_reports_unfinished_simulation(tmp_path, monkeypatch, capsys):
     """A sim.log without a result means the run is still going, not a timeout."""
     _need_backend()
@@ -201,12 +226,41 @@ def test_verilator_script(tmp_path):
     from oasis.config import Toolchain
 
     tc = Toolchain(tools={"verilator": "sh"}, cycle_limit=123)  # `sh` stands in for verilator
-    design = tmp_path / "07_design.sv"
+    design = tmp_path / "10_design.sv"
     design.write_text("module main; endmodule\n")
     text = write_verilator_script(tmp_path, design, tc).read_text()
     assert "--binary --top-module toplevel -fno-inline" in text
     assert "./verilator_obj/Vtoplevel" in text and "+DATA=$PWD" in text
     assert "CYCLE_LIMIT:-123" in text and "@@" not in text
+
+
+def test_stale_stage_outputs(tmp_path):
+    """Files left by a pipeline with other stage numbers are an error, and compile clears them."""
+    from oasis.stages import StageError, Workspace
+
+    ws = Workspace(tmp_path / "out")
+    for name in ("07_design.sv", "09_design.sv", "06_futil.futil", "golden.npy"):
+        (ws.out / name).write_text("")
+    assert ws.find("futil").name == "06_futil.futil"
+    with pytest.raises(StageError, match="07_design.sv, 09_design.sv"):
+        ws.find("design")
+    removed = ws.clear_dumps()
+    assert [p.name for p in removed] == ["06_futil.futil", "07_design.sv", "09_design.sv"]
+    assert sorted(p.name for p in ws.out.iterdir()) == ["golden.npy", "logs"]
+
+
+def test_synth_scripts_drop_stale_reports(tmp_path):
+    """Regenerating synth/ removes the reports of the previous design."""
+    from oasis.backend.vivado import write_synth_scripts
+    from oasis.config import Toolchain
+
+    for name in ("utilization.rpt", "timing.rpt", "synth.log"):
+        (tmp_path / name).write_text("old")
+    design = tmp_path / "design_synth.sv"
+    design.write_text("module forward; endmodule\n")
+    write_synth_scripts(tmp_path, design, "forward", Toolchain(tools={"vivado": "sh"}))
+    assert not any((tmp_path / n).exists() for n in ("utilization.rpt", "timing.rpt", "synth.log"))
+    assert (tmp_path / "run_synth.sh").exists()
 
 
 def test_sim_uses_selected_simulator(tmp_path, monkeypatch):

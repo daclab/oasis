@@ -42,3 +42,8 @@ def test_v0_pipeline_loads():
     assert p.stages[0].kind == "export"
     assert sum(s.handoff for s in p.stages) == 1
     assert set(p.handoff_dialects) >= {"func", "scf", "memref", "arith"}
+
+
+def test_default_simulator_is_verilator(monkeypatch):
+    monkeypatch.delenv("OASIS_SIMULATOR", raising=False)
+    assert load_toolchain().simulator == "verilator"

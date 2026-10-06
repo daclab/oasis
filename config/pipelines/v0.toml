@@ -4,6 +4,7 @@
 #   export   : PyTorch -> linalg-on-tensors via torch_mlir.fx.export_and_import
 #   frontend : MLIR pass list run by the frontend runner (see config/toolchain.toml [frontend])
 #   tool     : external backend tool (see the backend section below)
+#   fixup    : Python text fix-up between tools (oasis.backend.fixups)
 #
 # Frontend pass names were verified against the torch-mlir wheel 20261001 (2026-10-02) by
 # parsing each one with torch_mlir.passmanager.PassManager. Re-verify when bumping the wheel.
@@ -54,10 +55,23 @@ passes = [
 # CIRCT a8cf045b3 on 2026-10-02.
 # TODO(verify): check against circt-opt --help / hlstool --help for the pinned version.
 
+# OASIS passes + upstream cleanups (oasis-opt, CIRCT's LLVM):
+#   oasis-lower-memref-copy  memref.copy (e.g. conv zero-padding) -> load/store loop nests
+#   lower-affine, fold-memref-alias-ops, lower-affine
+#                            fold memref.subview/expand/collapse into index arithmetic;
+#                            the second lower-affine removes the affine.apply the fold creates
+#   arith-expand             arith.maximumf (max-pool) -> cmpf + select; hlstool has no maximumf
+[[stage]]
+name = "legalize"
+kind = "tool"
+tool = "oasis_opt"
+args = ["{in}", "--oasis-lower-memref-copy", "--lower-affine", "--fold-memref-alias-ops",
+        "--lower-affine", "--arith-expand", "--canonicalize", "--cse", "-o", "{out}"]
+
 # Flatten every memref to 1-D (hlstool needs 1-D memories). OASIS's pass, not CIRCT's
 # `flatten-memref`: CIRCT computes wrong addresses for rank >= 3 memrefs (it multiplies by
 # the product of all remaining dimensions instead of the next one), which broke every
-# NCHW tensor (e.g. relu) while 2-D gemm/ffnn happened to be correct.
+# NCHW tensor (relu, ResNet) while 2-D gemm/ffnn happened to be correct.
 [[stage]]
 name = "scf_flat"
 kind = "tool"
@@ -72,18 +86,36 @@ args = ["--calyx-hw", "--output-level=core", "--top-level-function={top}", "--ir
         "--allow-unregistered-dialects", "{in}", "-o", "{out}"]
 
 [[stage]]
-name = "futil"
+name = "export"
 kind = "tool"
 tool = "circt_translate"
 ext = ".futil"
 args = ["--export-calyx", "{in}", "-o", "{out}"]
 
+# circt-translate prints float constants lossily (printf %f, `-inf`), and Calyx only parses
+# unsigned decimal floats. Rewrite each as std_const with the exact bits from NN_calyx.mlir.
+[[stage]]
+name = "futil"
+kind = "fixup"
+fixup = "calyx_float_consts"
+ext = ".futil"
+
 # Simulation RTL: keeps $readmemh/$writememh/final for the testbench. The synthesis RTL is
 # generated separately by `oasis tb` with `calyx --synthesis`.
 [[stage]]
-name = "design"
+name = "verilog"
 kind = "tool"
 tool = "calyx"
 ext = ".sv"
 stdout = true
+unlimited_stack = true  # calyx overflows the default 8 MB stack on ResNet-sized programs
 args = ["-l", "{calyx_lib}", "-b", "verilog", "{in}"]
+
+# Vivado rejects a port re-declared as a wire in the module body (VRFC 10-9336), which
+# Calyx's HardFloat divider does (`output sqrtOpOut` ... `wire sqrtOpOut;`). Drop those
+# redundant lines. This is the RTL the testbench and synthesis use.
+[[stage]]
+name = "design"
+kind = "fixup"
+fixup = "vivado_compat_sv"
+ext = ".sv"

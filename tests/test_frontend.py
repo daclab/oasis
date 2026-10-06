@@ -35,6 +35,10 @@ def test_gemm_frontend_e2e(tmp_path):
     linalg = (out / "00_linalg.mlir").read_text()
     assert "linalg.matmul" in linalg and "tensor<32x32xf32>" in linalg
 
+    # The FX graphs before and after decomposition are logged with the export stage.
+    log = (out / "logs" / "linalg.log").read_text()
+    assert "torch.ops.aten.matmul.default" in log and "torch.ops.aten.mm.default" in log
+
     scf = (out / "03_scf.mlir").read_text()
     check_handoff(scf, HANDOFF)
     ops = ops_used(scf)
@@ -52,3 +56,10 @@ def test_ported_benchmarks_reach_handoff(bench, tmp_path):
     out = tmp_path / bench
     assert main(["compile", bench, "--out", str(out), "--stop-after", "scf"]) == 0
     check_handoff((out / "03_scf.mlir").read_text(), HANDOFF)
+
+
+def test_gelu_needs_math_approximation(tmp_path, capsys):
+    """Known gap: GELU lowers to math.erf, which the hand-off check rejects."""
+    pytest.importorskip("torch_mlir")
+    assert main(["compile", "gelu", "--out", str(tmp_path / "gelu"), "--stop-after", "scf"]) == 1
+    assert "math.erf" in capsys.readouterr().err

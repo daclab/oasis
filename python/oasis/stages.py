@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import resource
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -44,14 +45,39 @@ class Workspace:
         path.write_text(text)
         return path
 
+    def clear_dumps(self) -> list[Path]:
+        """Delete every NN_<stage>.* file of an earlier compile. Returns the paths removed.
+
+        A pipeline with different stages numbers them differently, so its files would sit
+        next to this run's (07_design.sv and 09_design.sv) and `find` could pick the wrong one.
+        """
+        stale = sorted(p for p in self.out.glob("[0-9][0-9]_*") if p.is_file())
+        for path in stale:
+            path.unlink()
+        return stale
+
     def find(self, stage: str) -> Path:
-        """The output file of `stage` (NN_<stage>.*), or a clear error if it doesn't exist."""
+        """The output file of `stage` (NN_<stage>.*), or a clear error if it is missing or
+        ambiguous."""
         matches = sorted(self.out.glob(f"[0-9][0-9]_{stage}.*"))
         if not matches:
             raise StageError(
                 stage, f"no output file NN_{stage}.* in {self.out}; run `oasis compile` first"
             )
-        return matches[-1]
+        if len(matches) > 1:
+            names = ", ".join(p.name for p in matches)
+            raise StageError(
+                stage,
+                f"several output files for one stage in {self.out} ({names}), left by compiles "
+                "with different pipelines; run `oasis compile` again",
+            )
+        return matches[0]
+
+
+def _raise_stack_limit() -> None:
+    """Child-process hook: stack soft limit = hard limit (unlimited if allowed)."""
+    _, hard = resource.getrlimit(resource.RLIMIT_STACK)
+    resource.setrlimit(resource.RLIMIT_STACK, (hard, hard))
 
 
 def run_tool(
@@ -61,15 +87,24 @@ def run_tool(
     out_path: Path,
     log: Path,
     stdout_to_file: bool = False,
+    unlimited_stack: bool = False,
 ) -> None:
-    """Run an external tool, log the command and its output, raise StageError on failure."""
+    """Run an external tool, log the command and its output, raise StageError on failure.
+
+    unlimited_stack: raise the stack limit as far as allowed (like `ulimit -s unlimited`);
+    the Calyx compiler recurses over the control program and overflows the default 8 MB on
+    large designs such as ResNet-18.
+    """
     cmd = [exe, *args]
+    preexec = _raise_stack_limit if unlimited_stack else None
     if stdout_to_file:
         with open(out_path, "w") as f:
-            proc = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, text=True, check=False)
+            proc = subprocess.run(
+                cmd, stdout=f, stderr=subprocess.PIPE, text=True, check=False, preexec_fn=preexec
+            )
         output = proc.stderr
     else:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, preexec_fn=preexec)
         output = proc.stdout + proc.stderr
     log.write_text(f"$ {shlex.join(cmd)}\n\n{output}")
     if proc.returncode != 0:

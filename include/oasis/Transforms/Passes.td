@@ -5,6 +5,24 @@
 
 include "mlir/Pass/PassBase.td"
 
+def LowerMemrefCopy : Pass<"oasis-lower-memref-copy", "::mlir::func::FuncOp"> {
+  let summary = "Lower memref.copy to affine.for loop nests of load/store";
+  let description = [{
+    hlstool (SCF -> Calyx) cannot lower `memref.copy`. Bufferizing `tensor.pad`
+    (zero padding before a convolution) produces copies into strided
+    `memref.subview`s, so each copy becomes a loop nest that loads from the
+    source and stores to the target. Run `lower-affine`, `fold-memref-alias-ops`
+    and `lower-affine` afterwards to fold the subviews into plain index
+    arithmetic on the underlying buffer.
+
+    Ported from flux-opt's `lower-memref-copy-to-affine`
+    (From-Algorithm-to-RTL/my-pass). Only static, identically shaped
+    source/target memrefs are supported.
+  }];
+  let dependentDialects = ["::mlir::affine::AffineDialect",
+                           "::mlir::memref::MemRefDialect"];
+}
+
 def FlattenMemref : Pass<"oasis-flatten-memref", "::mlir::ModuleOp"> {
   let summary = "Flatten statically shaped memrefs to 1-D with row-major addressing";
   let description = [{

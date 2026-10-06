@@ -21,18 +21,18 @@ OASIS is an open-source compiler that lowers PyTorch models to synthesizable RTL
       │
  ═════╪═════  handoff: textual .mlir on disk  ═════════════
       │
-      ▼  oasis-opt: flatten memories to 1-D (OASIS pass)
- scf + memref + arith, 1-D memories
+      ▼  oasis-opt (OASIS passes)
+ scf + memref + arith, legalized for hardware
       │
       ▼  CIRCT
  scf ──▶ Calyx ──▶ native Calyx (.futil)
       │  Calyx compiler
       ▼
- SystemVerilog ──▶ Vivado xsim simulation ──▶ check vs. PyTorch (bit-exact for integers)
+ SystemVerilog ──▶ Verilator / Vivado xsim simulation ──▶ check vs. PyTorch (bit-exact for integers)
               └──▶ Vivado synthesis       ──▶ area, timing
 ```
 
-Every stage writes its output to disk as a numbered file (`00_linalg.mlir`, `01_bufferized.mlir`, … `07_design.sv`), so you can inspect the design at any level of abstraction.
+Every stage writes its output to disk as a numbered file (`00_linalg.mlir`, `01_bufferized.mlir`, … `10_design.sv`), so you can inspect the design at any level of abstraction.
 
 ## Requirements
 
@@ -40,11 +40,11 @@ Every stage writes its output to disk as a numbered file (`00_linalg.mlir`, `01_
 |---|---|---|
 | Linux, Python 3.11 (conda) | Ubuntu 22.04 | everything |
 | torch-mlir (nightly wheel) + PyTorch nightly | torch-mlir 20261001, torch 2.15.0.dev20261002 | frontend |
-| CIRCT, with its bundled LLVM/MLIR | commit `a8cf045b3` | `hlstool`, `circt-translate`; LLVM/MLIR for building `oasis-opt` |
+| CIRCT, with its bundled LLVM/MLIR | commit `a8cf045b3` | `circt-opt`, `hlstool`, `circt-translate`; LLVM/MLIR for building `oasis-opt` |
 | Calyx compiler (Rust) | built from source | Calyx to SystemVerilog |
 | CMake ≥ 3.20, Ninja, a C++17 compiler | CMake 3.22 | building CIRCT and `oasis-opt` |
-| AMD Vivado (optional) | 2023.2 | xsim simulation and synthesis |
-| Verilator ≥ 5 (optional) | — | faster simulation of large designs (`conda install -n oasis -c conda-forge verilator`) |
+| AMD Vivado (optional) | 2023.2 | synthesis; xsim as an alternative simulator |
+| Verilator ≥ 5 | 5.052 | simulation (`conda install -n oasis -c conda-forge verilator`) |
 
 ## Installation
 
@@ -132,24 +132,24 @@ Activate the environment first (`conda activate oasis`) and run from the reposit
 | Command | What it does |
 |---|---|
 | `oasis list` | List the benchmarks and their input sizes |
-| `oasis compile gemm` | PyTorch → RTL (`07_design.sv`), every stage's IR, testbench and Vivado scripts |
+| `oasis compile gemm` | PyTorch → RTL (`10_design.sv`), every stage's IR, testbench and Vivado scripts |
 | `oasis compile gemm --size medium` | Same, with another input size from `models/data.py` |
-| `oasis compile gemm --sim` | ...then simulate in Vivado xsim and compare with PyTorch |
-| `oasis compile gemm --sim --simulator verilator` | Same, simulating with Verilator (much faster on large designs) |
+| `oasis compile gemm --sim` | ...then simulate (Verilator) and compare with PyTorch |
+| `oasis compile gemm --sim --simulator xsim` | Same, simulating with Vivado xsim (slower; shows undefined `x` values, useful for debugging) |
 | `oasis compile gemm --synth` | ...then run Vivado synthesis and report LUT/FF/DSP/BRAM, WNS, Fmax (`--syn` also works) |
 | `oasis compile gemm --sim --synth` | Both (same as `oasis run gemm`) |
 | `oasis compile gemm --no-tb` | Compile only, no testbench |
 | `oasis compile gemm --no-dump-all` | Keep only the files later stages need |
 | `oasis compile gemm --stop-after scf` | Stop after a named stage (e.g. only the frontend) |
 | `oasis tb gemm` | Regenerate the testbench and Vivado scripts only |
-| `oasis check gemm` | Compare an existing xsim run's output with PyTorch |
+| `oasis check gemm` | Compare an existing simulation's output with PyTorch |
 | `oasis report gemm` | Re-read existing simulation/synthesis results and print the summary |
 | `oasis tools` | Show where every external tool resolves |
 
 The Vivado runs can also be started by hand. `oasis compile` prints the exact commands:
 
 ```bash
-bash out/gemm_small/sim/run_xsim.sh      && oasis check gemm     # simulation + check
+bash out/gemm_small/sim/run_verilator.sh && oasis check gemm     # simulation + check (or run_xsim.sh)
 bash out/gemm_small/synth/run_synth.sh   && oasis report gemm    # synthesis + report
 ```
 
@@ -159,12 +159,12 @@ All outputs of a run go to `out/<benchmark>_<size>/`:
 
 | Path | Contents |
 |---|---|
-| `NN_<stage>.*` | IR of every stage, ending with `07_design.sv` (the RTL) |
+| `NN_<stage>.*` | IR of every stage, ending with `10_design.sv` (the RTL) |
 | `inputs.npz`, `golden.npy` | Inputs and the expected output from PyTorch |
-| `sim/` | Testbench, memory files, xsim logs (`sim.log`) and simulated output |
+| `sim/` | Testbench, memory files, simulation log (`sim.log`) and simulated output |
 | `synth/` | Synthesis RTL and scripts, `utilization.rpt`, `timing.rpt` |
 | `report.json` | Summary: cycles, check result, resources, timing |
-| `logs/` | The command and output of each stage |
+| `logs/` | The command and output of each stage; `logs/linalg.log` also holds the FX graph before and after decomposition |
 
 ## Benchmarks
 
@@ -174,11 +174,12 @@ All outputs of a run go to `out/<benchmark>_<size>/`:
 | `relu` | f32 | ReLU(x + y), 1×3×10×10 | RTL and testbench |
 | `ffnn` | f32 | Linear 64→48, ReLU, Linear 48→4; weights as memories | RTL and testbench |
 | `increment` | i32 | a + 1 | RTL and testbench |
+| `gelu` | f32 | GELU(x + y) | Not supported yet: needs an approximation for `math.erf` |
 
 ### Adding a benchmark
 
 1. Put the model in `models/<suite>/<name>.py`. The file contains only the `torch.nn.Module` class.
-2. Register it in `models/data.py`: the class, its data type, and the input shapes per size. Optionally add constructor arguments per size (`init`) and weights as memories (`weights: "args"`).
+2. Register it in `models/data.py`: the class, its data type, and the input shapes per size. Optionally add constructor arguments per size (`init`), weights as memories (`weights: "args"`) and preparation steps such as BatchNorm folding (`prepare`).
 3. Run `oasis compile <name>`.
 
 OASIS generates the inputs from the registered shapes and computes the golden output with PyTorch; the model file never contains inputs or checks.
@@ -210,20 +211,22 @@ OASIS/
 │   ├── frontend/
 │   │   ├── export.py             PyTorch -> linalg (torch-mlir FX importer)
 │   │   ├── lower.py              linalg -> scf/memref/arith
-│   │   └── prepare.py            weights as kernel arguments
+│   │   └── prepare.py            BatchNorm folding, weights as kernel arguments
 │   └── backend/
 │       ├── memmap.py             which Calyx memory holds which argument
+│       ├── fixups.py             exact float constants in .futil
 │       ├── testbench.py          sim/: tb.sv + memory init files
 │       ├── vivado.py             xsim/synthesis scripts, report parsing
-│       └── templates/            tb.sv, run_xsim.sh, synth.tcl, clocks.xdc, run_synth.sh
+│       └── templates/            tb.sv, run_verilator.sh, run_xsim.sh, synth.tcl, clocks.xdc, run_synth.sh
 ├── include/oasis/Transforms/     oasis-opt pass definitions (Passes.td, Passes.h)
 ├── lib/Transforms/               oasis-opt passes (C++)
 ├── tools/oasis-opt/              oasis-opt driver
 ├── models/
 │   ├── data.py                   benchmark registry: model, dtype, input shapes
 │   ├── polybench/gemm.py
-│   ├── nn/                       relu.py, ffnn.py
-│   └── misc/increment.py
+│   ├── nn/                       relu.py, gelu.py, ffnn.py
+│   ├── misc/increment.py
+│   └── cnn/                      resnet18.py, resnet_blocks.py
 ├── config/
 │   ├── toolchain.toml            default tools, FPGA target, simulation settings
 │   ├── toolchain.local.toml.example

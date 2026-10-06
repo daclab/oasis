@@ -44,10 +44,11 @@ xsim = "xsim"
 calyx_lib = "/path/to/calyx"
 
 [sim]
-# "xsim" (Vivado) or "verilator" (>= 5; much faster on large designs). `oasis tb` writes a
+# "verilator" (>= 5, default: much faster than xsim on large designs) or "xsim" (Vivado;
+# 4-state, so undefined values show up as `x`, which helps debugging). `oasis tb` writes a
 # run script for every installed one; this picks the one `--sim` runs. Override per run
-# with `--simulator verilator` or OASIS_SIMULATOR=verilator.
-simulator = "xsim"
+# with `--simulator xsim` or OASIS_SIMULATOR=xsim.
+simulator = "verilator"
 # Stop the testbench after this many cycles (prints TIMEOUT).
 cycle_limit = 10000000
 

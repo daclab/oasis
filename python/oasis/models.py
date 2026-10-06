@@ -49,14 +49,18 @@ class Benchmark:
     input_shapes: list[tuple[int, ...]]
     dtype: str
     init_kwargs: dict = field(default_factory=dict)
+    prepare: list[str] = field(default_factory=list)
     weights: str = "inline"  # "args": parameters/buffers become forward() arguments
 
     def build(self):
-        """The model as compiled: seeded construction, eval mode."""
+        """The model as compiled: seeded construction, eval mode, registry prepare steps."""
         import torch
 
+        from oasis.frontend.prepare import apply_prepare
+
         torch.manual_seed(SEED)
-        return self.model_cls(**self.init_kwargs).eval()
+        model = self.model_cls(**self.init_kwargs).eval()
+        return apply_prepare(model, self.prepare, SEED)
 
 
 def load_benchmark(name: str, size: str = "small") -> Benchmark:
@@ -81,5 +85,6 @@ def load_benchmark(name: str, size: str = "small") -> Benchmark:
         input_shapes=[tuple(s) for s in entry["inputs"][size]],
         dtype=entry.get("dtype", "f32"),
         init_kwargs=dict(entry.get("init", {}).get(size, {})),
+        prepare=list(entry.get("prepare", [])),
         weights=entry.get("weights", "inline"),
     )

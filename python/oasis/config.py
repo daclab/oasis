@@ -56,7 +56,7 @@ class Toolchain:
     tools: dict[str, str] = field(default_factory=dict)
     paths: dict[str, str] = field(default_factory=dict)
     frontend_runner: str = "inprocess"
-    simulator: str = "xsim"
+    simulator: str = "verilator"
     cycle_limit: int = 10_000_000
     fpga: FpgaTarget = field(default_factory=lambda: FpgaTarget())
 
@@ -111,7 +111,7 @@ def load_toolchain(directory: Path | None = None) -> Toolchain:
         frontend_runner=os.environ.get(
             "OASIS_FRONTEND_RUNNER", data.get("frontend", {}).get("runner", "inprocess")
         ),
-        simulator=os.environ.get("OASIS_SIMULATOR", sim.get("simulator", "xsim")),
+        simulator=os.environ.get("OASIS_SIMULATOR", sim.get("simulator", "verilator")),
         cycle_limit=int(os.environ.get("OASIS_CYCLE_LIMIT", sim.get("cycle_limit", 10_000_000))),
         fpga=FpgaTarget(
             part=os.environ.get("OASIS_FPGA_PART", fpga.get("part", FpgaTarget.part)),
@@ -136,6 +136,9 @@ class StageSpec:
     args: list[str] = field(default_factory=list)
     ext: str = ".mlir"
     stdout: bool = False
+    unlimited_stack: bool = False
+    # kind = "fixup" only: name of a function in oasis.backend.fixups
+    fixup: str = ""
 
 
 @dataclass
@@ -161,6 +164,8 @@ def load_pipeline(path: Path | None = None) -> Pipeline:
             args=list(s.get("args", [])),
             ext=s.get("ext", ".mlir"),
             stdout=bool(s.get("stdout", False)),
+            unlimited_stack=bool(s.get("unlimited_stack", False)),
+            fixup=s.get("fixup", ""),
         )
         for s in data.get("stage", [])
     ]

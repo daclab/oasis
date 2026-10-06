@@ -23,6 +23,7 @@ import numpy as np
 
 from oasis import __version__, report
 from oasis.backend import memmap, testbench, verilator, vivado
+from oasis.backend.fixups import FIXUPS
 from oasis.backend.memmap import MemMapError
 from oasis.config import ToolNotFoundError, load_pipeline, load_toolchain
 from oasis.data import read_out
@@ -65,14 +66,20 @@ def cmd_compile(args: argparse.Namespace) -> int:
     report.reset(ws.out)
     report.update(ws.out, "compile", {"top": args.top, "dtype": bench.dtype})
 
+    stale = ws.clear_dumps()
+    if stale:
+        print(f"removed {len(stale)} stage output(s) of an earlier compile")
+
     text = ""
     prev_path: Path | None = None  # previous stage's output on disk (input of tool stages)
     for index, stage in enumerate(pipeline.stages):
         log = ws.log_path(stage.name)
         print(f"[{index:02d}] {stage.name:<12} ({stage.kind})", flush=True)
         if stage.kind == "export":
-            text = export_linalg(export_model, export_args, func_name=args.top)
-            log.write_text("torch_mlir.fx.export_and_import(output_type='linalg-on-tensors')\n")
+            text, graphs = export_linalg(export_model, export_args, func_name=args.top)
+            log.write_text(
+                "torch_mlir.fx.export_and_import(output_type='linalg-on-tensors')\n\n" + graphs
+            )
         elif stage.kind == "frontend":
             text = run_frontend_passes(text, stage.passes, stage.name, toolchain, log)
         elif stage.kind == "tool":
@@ -93,12 +100,21 @@ def cmd_compile(args: argparse.Namespace) -> int:
                 out_path,
                 log,
                 stdout_to_file=stage.stdout,
+                unlimited_stack=stage.unlimited_stack,
             )
+            prev_path = out_path
+        elif stage.kind == "fixup":
+            if prev_path is None:
+                raise StageError(stage.name, "previous stage's output is not on disk")
+            if stage.fixup not in FIXUPS:
+                raise StageError(stage.name, f"unknown fixup '{stage.fixup}'")
+            out_path = ws.dump_path(index, stage.name, stage.ext)
+            FIXUPS[stage.fixup](prev_path, out_path, ws, log)
             prev_path = out_path
         else:
             raise StageError(stage.name, f"unknown stage kind '{stage.kind}'")
 
-        if stage.kind != "tool":
+        if stage.kind not in ("tool", "fixup"):
             written = ws.write_dump(index, stage.name, text, force=stage.handoff)
             prev_path = written
             if stage.handoff:
