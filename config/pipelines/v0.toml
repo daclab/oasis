@@ -51,9 +51,9 @@ passes = [
 # Backend (CIRCT's LLVM + Calyx). kind = "tool": run an external tool on the previous
 # stage's file. Placeholders: {in} {out} {top} and any key from [paths] in toolchain.toml.
 # stdout = true: the tool prints its result instead of taking -o.
-# These flags come from From-Algorithm-to-RTL/examples/*/lower.sh and worked with local
-# CIRCT a8cf045b3 on 2026-10-02.
-# TODO(verify): check against circt-opt --help / hlstool --help for the pinned version.
+# These flags come from From-Algorithm-to-RTL/examples/*/lower.sh. Every flag below was
+# checked against --help of the pinned tools (config/versions.toml: CIRCT a8cf045b3,
+# oasis-opt on its LLVM f091be6d53e4, calyx 3e595cef) on 2026-10-06. Re-check on a bump.
 
 # OASIS passes + upstream cleanups (oasis-opt, CIRCT's LLVM):
 #   oasis-lower-memref-copy  memref.copy (e.g. conv zero-padding) -> load/store loop nests

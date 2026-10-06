@@ -1,0 +1,10 @@
+# pip constraints: the Python package versions OASIS is verified with (see config/versions.toml).
+# pip install --pre -c config/constraints.txt torch-mlir torchvision \
+#   --extra-index-url https://download.pytorch.org/whl/nightly/cpu \
+#   -f https://github.com/llvm/torch-mlir-release/releases/expanded_assets/dev-wheels
+torch-mlir==20261001
+torch==2.15.0.dev20261002+cpu
+torchvision==0.30.0.dev20261002+cpu
+numpy==2.4.6
+pytest==9.1.1
+ruff==0.16.10

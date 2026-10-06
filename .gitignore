@@ -43,5 +43,7 @@ sim_out*.json
 
 # Personal notes, kept locally only
 CLAUDE.md
+AGENTS.md
 docs/full_plan.md
 docs/troubleshooting.md
+docs/changelog.md

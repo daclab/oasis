@@ -1,0 +1,46 @@
+# Pinned versions of every external dependency, as installed and verified on 2026-10-06
+# (pytest 44 passed, check-oasis 2/2, Verilator `oasis check` PASS for gemm/relu/ffnn/increment).
+# Python packages are also pinned for pip in config/constraints.txt; keep the two in sync
+# (tests/test_config.py checks this). When bumping anything here, re-verify the pass names in
+# config/pipelines/*.toml against the new version.
+
+# ---- Frontend: torch-mlir pip wheel (bundles its own LLVM/MLIR; never mixed with CIRCT's) ----
+[frontend]
+python = "3.11.17"
+torch-mlir = "20261001"                  # dev-wheels release; pins the frontend LLVM/MLIR
+torch = "2.15.0.dev20261002+cpu"         # PyTorch nightly, CPU
+torchvision = "0.30.0.dev20261002+cpu"   # ResNet models (models/cnn/)
+numpy = "2.4.6"
+
+# ---- Backend: CIRCT and the LLVM/MLIR it builds against ----
+[backend.circt]
+repo = "https://github.com/llvm/circt.git"
+commit = "a8cf045b3bffe224e0b9c5439923ee0fa3bb5936"   # git describe: firtool-1.139.0-106-ga8cf045b3
+
+[backend.llvm]
+# CIRCT's `llvm` submodule at the commit above; also the LLVM/MLIR that oasis-opt links.
+repo = "https://github.com/llvm/llvm-project.git"
+commit = "f091be6d53e447391ca23142cf9d49b2654116d7"
+version = "22.0.0git"
+
+[backend.calyx]
+repo = "https://github.com/calyxir/calyx.git"
+commit = "3e595cefd8d4f47c4e9b51feae56651b1874ee94"   # git describe: v0.7.1-443-g3e595cef
+version = "0.7.1"                                     # `calyx --version`
+fud2 = "0.0.2"                                        # crate `fud`, from `cargo install --list`
+
+# ---- Simulation and synthesis ----
+[sim]
+verilator = "5.052"          # conda-forge build
+vivado = "2023.2"            # SW Build 4029153; xsim, synthesis (user runs only)
+
+# ---- Build tools for CIRCT and oasis-opt ----
+[build]
+cmake = "3.22.1"             # /usr/bin/cmake (not the Vitis-bundled 3.3.2)
+ninja = "1.10.1"
+gcc = "11.4.0"               # Ubuntu 22.04
+
+# ---- Development ----
+[dev]
+pytest = "9.1.1"
+ruff = "0.16.10"

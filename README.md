@@ -36,13 +36,15 @@ Every stage writes its output to disk as a numbered file (`00_linalg.mlir`, `01_
 
 ## Requirements
 
-| Dependency | Version tested | Used for |
+Exact versions are pinned in [`config/versions.toml`](config/versions.toml) (all tools) and [`config/constraints.txt`](config/constraints.txt) (pip).
+
+| Dependency | Version pinned | Used for |
 |---|---|---|
-| Linux, Python 3.11 (conda) | Ubuntu 22.04 | everything |
-| torch-mlir (nightly wheel) + PyTorch nightly | torch-mlir 20261001, torch 2.15.0.dev20261002 | frontend |
-| CIRCT, with its bundled LLVM/MLIR | commit `a8cf045b3` | `circt-opt`, `hlstool`, `circt-translate`; LLVM/MLIR for building `oasis-opt` |
-| Calyx compiler (Rust) | built from source | Calyx to SystemVerilog |
-| CMake ≥ 3.20, Ninja, a C++17 compiler | CMake 3.22 | building CIRCT and `oasis-opt` |
+| Linux, Python 3.11 (conda) | Ubuntu 22.04, Python 3.11.17 | everything |
+| torch-mlir (nightly wheel) + PyTorch nightly | torch-mlir 20261001, torch 2.15.0.dev20261002+cpu, torchvision 0.30.0.dev20261002+cpu | frontend (the wheel bundles its own LLVM/MLIR) |
+| CIRCT, with its bundled LLVM/MLIR | CIRCT `a8cf045b3`, LLVM submodule `f091be6d53e4` (22.0.0git) | `circt-opt`, `hlstool`, `circt-translate`; LLVM/MLIR for building `oasis-opt` |
+| Calyx compiler (Rust) | commit `3e595cef` (0.7.1), fud2 0.0.2 | Calyx to SystemVerilog |
+| CMake ≥ 3.20, Ninja, a C++17 compiler | CMake 3.22.1, Ninja 1.10.1, GCC 11.4.0 | building CIRCT and `oasis-opt` |
 | AMD Vivado (optional) | 2023.2 | synthesis; xsim as an alternative simulator |
 | Verilator ≥ 5 | 5.052 | simulation (`conda install -n oasis -c conda-forge verilator`) |
 
@@ -51,9 +53,10 @@ Every stage writes its output to disk as a numbered file (`00_linalg.mlir`, `01_
 ### 1. Python environment and torch-mlir
 
 ```bash
+git clone <this repository> ~/OASIS     # for config/constraints.txt; installed in step 4
 conda create -n oasis python=3.11
 conda activate oasis
-pip install --pre torch-mlir torchvision \
+pip install --pre -c ~/OASIS/config/constraints.txt torch-mlir torchvision \
   --extra-index-url https://download.pytorch.org/whl/nightly/cpu \
   -f https://github.com/llvm/torch-mlir-release/releases/expanded_assets/dev-wheels
 ```
@@ -65,8 +68,8 @@ CIRCT ships LLVM as a submodule. Build LLVM/MLIR first, then CIRCT (this takes a
 ```bash
 git clone https://github.com/llvm/circt.git ~/circt
 cd ~/circt
-git checkout a8cf045b3          # the commit OASIS v0.1 was tested with
-git submodule update --init
+git checkout a8cf045b3bffe224e0b9c5439923ee0fa3bb5936   # pinned in config/versions.toml
+git submodule update --init      # LLVM at f091be6d53e447391ca23142cf9d49b2654116d7
 
 # LLVM + MLIR
 mkdir -p llvm/build && cd llvm/build
@@ -95,6 +98,7 @@ This gives `~/circt/build/bin/{circt-opt,hlstool,circt-translate}` and the LLVM/
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # if Rust is not installed
 git clone https://github.com/calyxir/calyx.git ~/calyx
 cd ~/calyx
+git checkout 3e595cefd8d4f47c4e9b51feae56651b1874ee94   # pinned in config/versions.toml
 cargo build --release            # binary: ~/calyx/target/release/calyx
 ```
 
@@ -103,9 +107,8 @@ OASIS also needs the repository path itself, because the Calyx primitives live t
 ### 4. OASIS
 
 ```bash
-git clone <this repository> ~/OASIS
-cd ~/OASIS
-pip install -e ".[dev]"          # installs the `oasis` command into the conda env
+cd ~/OASIS                       # cloned in step 1
+pip install -c config/constraints.txt -e ".[dev]"   # installs the `oasis` command into the conda env
 
 # oasis-opt (C++), built against CIRCT's LLVM/MLIR
 cmake -G Ninja -S . -B build/cmake \

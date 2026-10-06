@@ -47,3 +47,18 @@ def test_v0_pipeline_loads():
 def test_default_simulator_is_verilator(monkeypatch):
     monkeypatch.delenv("OASIS_SIMULATOR", raising=False)
     assert load_toolchain().simulator == "verilator"
+
+
+def test_pinned_versions_agree():
+    """config/constraints.txt pins the same Python packages as config/versions.toml."""
+    import tomllib
+
+    from oasis.config import REPO_ROOT
+
+    versions = tomllib.loads((REPO_ROOT / "config" / "versions.toml").read_text())
+    pinned = versions["frontend"] | versions["dev"]
+    lines = (REPO_ROOT / "config" / "constraints.txt").read_text().splitlines()
+    constraints = dict(line.split("==") for line in lines if line and not line.startswith("#"))
+    assert constraints == {k: v for k, v in pinned.items() if k != "python"}
+    for section in ("circt", "llvm", "calyx"):
+        assert len(versions["backend"][section]["commit"]) == 40  # full hashes, not short ones
