@@ -51,6 +51,9 @@ class Benchmark:
     init_kwargs: dict = field(default_factory=dict)
     prepare: list[str] = field(default_factory=list)
     weights: str = "inline"  # "args": parameters/buffers become forward() arguments
+    token_inputs: list[int] = field(default_factory=list)  # args that are token ids
+    status: str = ""  # "wip": work in progress
+    note: str = ""  # why it is work in progress
 
     def build(self):
         """The model as compiled: seeded construction, eval mode, registry prepare steps."""
@@ -87,4 +90,7 @@ def load_benchmark(name: str, size: str = "small") -> Benchmark:
         init_kwargs=dict(entry.get("init", {}).get(size, {})),
         prepare=list(entry.get("prepare", [])),
         weights=entry.get("weights", "inline"),
+        token_inputs=list(entry.get("token_inputs", [])),
+        status=entry.get("status", ""),
+        note=entry.get("note", ""),
     )

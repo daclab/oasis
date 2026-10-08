@@ -55,6 +55,8 @@ def cmd_compile(args: argparse.Namespace) -> int:
     pipeline = load_pipeline(Path(args.pipeline) if args.pipeline else None)
     bench, ws = _workspace(args, dump_all=args.dump_all)
 
+    if bench.status == "wip":
+        print(f"note: {bench.name} is work in progress: {bench.note}", flush=True)
     # The model as compiled (seeded, prepared), its inputs and the PyTorch reference output.
     model = bench.build()
     activations = make_inputs(bench)
@@ -326,7 +328,8 @@ def cmd_list(args: argparse.Namespace) -> int:
     """List benchmarks and their sizes from models/data.py."""
     for name, entry in sorted(registry().items()):
         sizes = ", ".join(f"{k}={v}" for k, v in entry["inputs"].items())
-        print(f"{name:<12} {entry['dtype']:<4} {entry['model']:<28} {sizes}")
+        status = "[wip]" if entry.get("status") == "wip" else ""
+        print(f"{name:<18} {status:<5} {entry['dtype']:<4} {entry['model']:<40} {sizes}")
     return 0
 
 

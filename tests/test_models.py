@@ -52,3 +52,33 @@ def test_compare_int_is_bit_exact():
     y[3] += 1
     r = compare(y, x, "i32")
     assert not r.ok and r.mismatches == 1
+
+
+@pytest.mark.parametrize(
+    "name, out_shape",
+    [
+        ("k3mm", (16, 22)),
+        ("attention", (1, 16, 32)),
+        ("transformer_block", (1, 16, 32)),
+        ("tiny_llm", (1, 16, 64)),
+    ],
+)
+def test_wip_benchmarks_run_in_pytorch(name, out_shape):
+    """The WIP benchmarks build, get inputs and produce a golden output of the right shape."""
+    bench = load_benchmark(name)
+    assert bench.status == "wip" and bench.note
+    out = golden(bench.build(), make_inputs(bench))
+    assert out.shape == out_shape and np.isfinite(out).all()
+
+
+def test_tiny_llm_gets_token_ids():
+    bench = load_benchmark("tiny_llm")
+    (ids,) = make_inputs(bench)
+    assert ids.dtype == torch.int64 and ids.shape == (1, 16)
+    assert 0 <= int(ids.min()) and int(ids.max()) < bench.init_kwargs["vocab_size"]
+
+
+def test_k3mm_golden_matches_formula():
+    bench = load_benchmark("k3mm")
+    a, b, c, d = make_inputs(bench)
+    assert compare(golden(bench.build(), (a, b, c, d)), ((a @ b) @ (c @ d)).numpy(), "f32").ok

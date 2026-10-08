@@ -175,13 +175,17 @@ All outputs of a run go to `out/<benchmark>_<size>/`:
 
 ## Benchmarks
 
-| Benchmark | Data type | Description | v0.1 status |
+| Benchmark | Data type | Description | Status |
 |---|---|---|---|
 | `gemm` | f32 | `C = A @ B`; 32×32 (`small`), PolyBench MEDIUM (`medium`) | RTL, simulated (PASS), synthesized |
 | `relu` | f32 | ReLU(x + y), 1×3×10×10 | RTL and testbench |
 | `ffnn` | f32 | Linear 64→48, ReLU, Linear 48→4; weights as memories | RTL and testbench |
 | `increment` | i32 | a + 1 | RTL and testbench |
 | `gelu` | f32 | GELU(x + y) | Not supported yet: needs an approximation for `math.erf` |
+| `k3mm` | f32 | PolyBench 3mm: `G = (A @ B) @ (C @ D)`; `small` 16–24, PolyBench MEDIUM (`medium`) | **WIP**: added, not compiled yet |
+| `attention` | f32 | Multi-head self-attention (from Stream-HLS); weights as memories | **WIP**: softmax needs `math.exp` |
+| `transformer_block` | f32 | LayerNorm + attention + LayerNorm + feed-forward (ReLU), residuals | **WIP**: softmax (`math.exp`), LayerNorm (runtime `rsqrt`) |
+| `tiny_llm` | f32 | Decoder-only LLM: token/position embeddings, 2 causal blocks, LM head; input = token ids | **WIP**: as `transformer_block`, plus embedding lookup by token id |
 
 ### Adding a benchmark
 
