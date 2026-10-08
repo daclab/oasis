@@ -30,6 +30,7 @@ OASIS is an open-source compiler that lowers PyTorch models to synthesizable RTL
       ▼
  SystemVerilog ──▶ Verilator / Vivado xsim simulation ──▶ check vs. PyTorch (bit-exact for integers)
               └──▶ Vivado synthesis       ──▶ area, timing
+              └──▶ Yosys synthesis        ──▶ cell counts (no Vivado needed)
 ```
 
 Every stage writes its output to disk as a numbered file (`00_linalg.mlir`, `01_bufferized.mlir`, … `10_design.sv`), so you can inspect the design at any level of abstraction.
@@ -46,6 +47,7 @@ Exact versions are pinned in [`config/versions.toml`](config/versions.toml) (all
 | Calyx compiler (Rust) | commit `3e595cef` (0.7.1), fud2 0.0.2 | Calyx to SystemVerilog |
 | CMake ≥ 3.20, Ninja, a C++17 compiler | CMake 3.22.1, Ninja 1.10.1, GCC 11.4.0 | building CIRCT and `oasis-opt` |
 | AMD Vivado (optional) | 2023.2 | synthesis; xsim as an alternative simulator |
+| Yosys (optional) | 0.58+80 (`37875fded`) | open-source synthesis (cell counts), `[fpga] synth_tool = "yosys"` |
 | Verilator ≥ 5 | 5.052 | simulation (`conda install -n oasis -c conda-forge verilator`) |
 
 ## Installation
@@ -139,7 +141,7 @@ Activate the environment first (`conda activate oasis`) and run from the reposit
 | `oasis compile gemm --size medium` | Same, with another input size from `models/data.py` |
 | `oasis compile gemm --sim` | ...then simulate (Verilator) and compare with PyTorch |
 | `oasis compile gemm --sim --simulator xsim` | Same, simulating with Vivado xsim (slower; shows undefined `x` values, useful for debugging) |
-| `oasis compile gemm --synth` | ...then run Vivado synthesis and report LUT/FF/DSP/BRAM, WNS, Fmax (`--syn` also works) |
+| `oasis compile gemm --synth` | ...then run synthesis and report it (`--syn` also works): Vivado gives LUT/FF/DSP/BRAM, WNS, Fmax; Yosys gives cell counts |
 | `oasis compile gemm --sim --synth` | Both (same as `oasis run gemm`) |
 | `oasis compile gemm --no-tb` | Compile only, no testbench |
 | `oasis compile gemm --no-dump-all` | Keep only the files later stages need |
@@ -149,12 +151,14 @@ Activate the environment first (`conda activate oasis`) and run from the reposit
 | `oasis report gemm` | Re-read existing simulation/synthesis results and print the summary |
 | `oasis tools` | Show where every external tool resolves |
 
-The Vivado runs can also be started by hand. `oasis compile` prints the exact commands:
+The simulation and synthesis runs can also be started by hand. `oasis compile` prints the exact commands:
 
 ```bash
 bash out/gemm_small/sim/run_verilator.sh && oasis check gemm     # simulation + check (or run_xsim.sh)
-bash out/gemm_small/synth/run_synth.sh   && oasis report gemm    # synthesis + report
+bash out/gemm_small/synth/run_synth.sh   && oasis report gemm    # synthesis + report (or run_yosys.sh)
 ```
+
+**Synthesis without Vivado.** Set `[fpga] synth_tool = "yosys"` in `config/toolchain.local.toml` (or `OASIS_SYNTH_TOOL=yosys` for one run) and `[tools] yosys` to your Yosys binary. `oasis tb` then writes `synth/run_yosys.sh`, which runs `synth_xilinx -family <yosys_family>` (default `xcup`, UltraScale+) and writes `stat.json`; `oasis report` reads it. Yosys gives cell counts only, no timing. It maps carry chains to `CARRY4` even on UltraScale+ (2 × `CARRY4` ≈ 1 × `CARRY8`), and its LUT counts run higher than Vivado's, so compare Yosys numbers with each other.
 
 ### Results
 
@@ -165,7 +169,7 @@ All outputs of a run go to `out/<benchmark>_<size>/`:
 | `NN_<stage>.*` | IR of every stage, ending with `10_design.sv` (the RTL) |
 | `inputs.npz`, `golden.npy` | Inputs and the expected output from PyTorch |
 | `sim/` | Testbench, memory files, simulation log (`sim.log`) and simulated output |
-| `synth/` | Synthesis RTL and scripts, `utilization.rpt`, `timing.rpt` |
+| `synth/` | Synthesis RTL and scripts: Vivado (`run_synth.sh`, `utilization.rpt`, `timing.rpt`) or Yosys (`run_yosys.sh`, `stat.json`) |
 | `report.json` | Summary: cycles, check result, resources, timing |
 | `logs/` | The command and output of each stage; `logs/linalg.log` also holds the FX graph before and after decomposition |
 
@@ -191,7 +195,7 @@ OASIS generates the inputs from the registered shapes and computes the golden ou
 
 | File | Contents |
 |---|---|
-| `config/toolchain.toml` | Default tool names, simulation cycle limit, FPGA target (`[fpga] part`, `clock_mhz`, `synth_top`) |
+| `config/toolchain.toml` | Default tool names, simulation cycle limit, FPGA target and synthesis tool (`[fpga] part`, `clock_mhz`, `synth_top`, `synth_tool`, `yosys_family`) |
 | `config/toolchain.local.toml` | Your machine's tool paths; overrides the defaults (not committed) |
 | `config/pipelines/v0.toml` | The ordered stages and the exact passes/flags of each tool |
 | `models/data.py` | Benchmark registry |
@@ -220,7 +224,8 @@ OASIS/
 │       ├── fixups.py             exact float constants in .futil
 │       ├── testbench.py          sim/: tb.sv + memory init files
 │       ├── vivado.py             xsim/synthesis scripts, report parsing
-│       └── templates/            tb.sv, run_verilator.sh, run_xsim.sh, synth.tcl, clocks.xdc, run_synth.sh
+│       ├── yosys.py              Yosys synthesis script, stat.json parsing
+│       └── templates/            tb.sv, run_verilator.sh, run_xsim.sh, synth.tcl, clocks.xdc, run_synth.sh, synth.ys, run_yosys.sh
 ├── include/oasis/Transforms/     oasis-opt pass definitions (Passes.td, Passes.h)
 ├── lib/Transforms/               oasis-opt passes (C++)
 ├── tools/oasis-opt/              oasis-opt driver

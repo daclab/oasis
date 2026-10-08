@@ -6,10 +6,11 @@ oasis compile gemm      PyTorch -> MLIR -> Calyx -> NN_design.sv (+ inputs.npz, 
 oasis tb gemm           sim/ (tb.sv, mem_N.dat, run_xsim.sh) and synth/ (RTL + scripts)
 oasis sim gemm          run sim/run_xsim.sh (Vivado xsim), then check
 oasis check gemm        compare the simulated output memory with golden.npy
-oasis synth gemm        run synth/run_synth.sh (Vivado), then parse the reports
+oasis synth gemm        run synth/run_synth.sh (Vivado) or run_yosys.sh ([fpga] synth_tool),
+                        then parse the reports
 oasis report gemm       re-read logs/reports and print the summary (no tools run)
 oasis compile gemm --sim --synth
-                        ...then also run Vivado xsim (+ check) and/or synthesis (+ report)
+                        ...then also simulate (+ check) and/or synthesize (+ report)
 oasis run gemm          same as `oasis compile gemm --sim --synth`
 """
 
@@ -22,7 +23,7 @@ from pathlib import Path
 import numpy as np
 
 from oasis import __version__, report
-from oasis.backend import memmap, testbench, verilator, vivado
+from oasis.backend import memmap, testbench, verilator, vivado, yosys
 from oasis.backend.fixups import FIXUPS
 from oasis.backend.memmap import MemMapError
 from oasis.config import ToolNotFoundError, load_pipeline, load_toolchain
@@ -136,7 +137,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
         print("simulation (Vivado xsim):")
         rc = cmd_sim(args)  # 2 = simulation ran but the check failed; still run synthesis
     if args.synth:
-        print("synthesis (Vivado):")
+        print(f"synthesis ({load_toolchain().fpga.synth_tool}):")
         rc = cmd_synth(args) or rc
     return rc
 
@@ -165,13 +166,20 @@ def cmd_tb(args: argparse.Namespace) -> int:
         sim_scripts["verilator"] = verilator.write_verilator_script(sim_dir, design, tc)
 
     synth_script = None
-    if tc.available("vivado"):
+    tool = tc.fpga.synth_tool
+    if tc.available(tool):
         synth_dir = ws.out / "synth"
         synth_dir.mkdir(exist_ok=True)
+        # Scripts and results of either tool from an earlier `oasis tb` belong to old RTL.
+        for name in (*vivado.SYNTH_FILES, *yosys.SYNTH_FILES):
+            (synth_dir / name).unlink(missing_ok=True)
         synth_sv = synth_dir / "design_synth.sv"
-        vivado.generate_synth_sv(ws.find("futil"), synth_sv, tc, synth_dir / "calyx.log")
+        vivado.generate_synth_sv(
+            ws.find("futil"), synth_sv, tc, synth_dir / "calyx.log", disable_verify=tool == "yosys"
+        )
         synth_top = tc.fpga.synth_top.format(top=top)
-        synth_script = vivado.write_synth_scripts(synth_dir, synth_sv, synth_top, tc)
+        backend = yosys if tool == "yosys" else vivado
+        synth_script = backend.write_synth_scripts(synth_dir, synth_sv, synth_top, tc)
 
     for mem in memories:
         print(f"  {mem.name}: arg {mem.arg_index} ({mem.role}, {mem.shape}, {mem.width}-bit)")
@@ -183,11 +191,13 @@ def cmd_tb(args: argparse.Namespace) -> int:
         print("simulate:  no simulator found (xsim or verilator); see `oasis tools`")
     if synth_script:
         print(
-            f"synthesis: bash {synth_script}    then: oasis report {bench.name} --size {bench.size}"
+            f"synthesis ({tool}): bash {synth_script}    "
+            f"then: oasis report {bench.name} --size {bench.size}"
         )
-        print(f"           top = {synth_top}, part = {tc.fpga.part}")
+        target = tc.fpga.yosys_family if tool == "yosys" else tc.fpga.part
+        print(f"           top = {synth_top}, target = {target}")
     else:
-        print("synthesis: skipped (vivado not found; see `oasis tools`)")
+        print(f"synthesis: skipped ({tool} not found; see `oasis tools`)")
     return 0
 
 
@@ -245,29 +255,49 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if ok else 2
 
 
+_SYNTH_SCRIPT = {"vivado": "run_synth.sh", "yosys": "run_yosys.sh"}
+_SYNTH_RESULT = {"vivado": "utilization.rpt", "yosys": "stat.json"}
+
+
 def _collect_synth(ws: Workspace) -> None:
-    """Utilization, WNS and Fmax from synth/*.rpt -> report.json."""
+    """Synthesis results of the configured tool -> report.json (replacing earlier ones)."""
     tc = load_toolchain()
+    top = report.load(ws.out).get("compile", {}).get("top", "forward")
+    if tc.fpga.synth_tool == "yosys":
+        stat = ws.out / "synth" / "stat.json"
+        if not stat.exists():
+            raise StageError("synth", f"{stat} not found; run synth/run_yosys.sh first")
+        values = yosys.parse_stat(stat.read_text())
+        values |= {
+            "tool": "yosys",
+            "top": tc.fpga.synth_top.format(top=top),
+            "family": tc.fpga.yosys_family,
+        }
+        report.replace(ws.out, "synth", values)
+        return
     synth_dir = ws.out / "synth"
     util_rpt, timing_rpt = synth_dir / "utilization.rpt", synth_dir / "timing.rpt"
     if not util_rpt.exists() or not timing_rpt.exists():
         raise StageError("synth", f"reports not found in {synth_dir}; run synth/run_synth.sh first")
     wns = vivado.parse_wns(timing_rpt.read_text())
-    top = report.load(ws.out).get("compile", {}).get("top", "forward")
     values = vivado.parse_utilization(util_rpt.read_text())
     values |= {
+        "tool": "vivado",
         "top": tc.fpga.synth_top.format(top=top),
         "part": tc.fpga.part,
         "clock_mhz": tc.fpga.clock_mhz,
         "wns_ns": wns,
         "fmax_mhz": vivado.fmax_mhz(tc.fpga.period_ns, wns),
     }
-    report.update(ws.out, "synth", values)
+    report.replace(ws.out, "synth", values)
 
 
 def cmd_synth(args: argparse.Namespace) -> int:
     _, ws = _workspace(args)
-    vivado.run_script(ws.out / "synth" / "run_synth.sh", "synth")
+    script = ws.out / "synth" / _SYNTH_SCRIPT[load_toolchain().fpga.synth_tool]
+    if not script.exists():
+        raise StageError("synth", f"{script} not found; run `oasis tb` (see `oasis tools`)")
+    vivado.run_script(script, "synth")
     _collect_synth(ws)
     print(report.summary(report.load(ws.out)))
     return 0
@@ -278,7 +308,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     bench, ws = _workspace(args)
     if (ws.out / "sim" / "sim.log").exists():
         _check(bench, ws)
-    if (ws.out / "synth" / "utilization.rpt").exists():
+    if (ws.out / "synth" / _SYNTH_RESULT[load_toolchain().fpga.synth_tool]).exists():
         _collect_synth(ws)
     print(report.summary(report.load(ws.out)))
     return 0
@@ -306,6 +336,7 @@ def cmd_tools(args: argparse.Namespace) -> int:
     print(f"frontend runner: {tc.frontend_runner}")
     print(f"simulator:       {tc.simulator} (cycle limit {tc.cycle_limit})")
     print(f"fpga:            {tc.fpga.part} @ {tc.fpga.clock_mhz:g} MHz, top {tc.fpga.synth_top}")
+    print(f"synthesis:       {tc.fpga.synth_tool} (yosys family {tc.fpga.yosys_family})")
     for key in sorted(tc.tools):
         try:
             where = tc.resolve(key)
@@ -354,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--tb",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="generate the testbench and Vivado scripts after compiling (default: on)",
+        help="generate the testbench and simulation/synthesis scripts after compiling (default: on)",
     )
     p.add_argument(
         "--sim",
@@ -367,7 +398,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--syn",
         dest="synth",
         action="store_true",
-        help="then run Vivado synthesis (synth/run_synth.sh) and report (slow)",
+        help="then run synthesis ([fpga] synth_tool: vivado or yosys) and report",
     )
     p.add_argument("--pipeline", help="pipeline TOML (default: config/pipelines/v0.toml)")
     p.add_argument("--top", default="forward", help="top-level function name (default: forward)")
@@ -375,10 +406,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_compile)
 
     for name, func, help_text in (
-        ("tb", cmd_tb, "generate testbench, memory files and simulator/Vivado scripts"),
+        ("tb", cmd_tb, "generate testbench, memory files, simulation and synthesis scripts"),
         ("sim", cmd_sim, "run the simulation script (xsim or verilator), then check"),
         ("check", cmd_check, "compare the simulated output with golden.npy"),
-        ("synth", cmd_synth, "run the synthesis script (Vivado), then parse reports"),
+        ("synth", cmd_synth, "run the synthesis script (vivado or yosys), then parse reports"),
         ("report", cmd_report, "re-read existing logs/reports and print the summary"),
     ):
         p = sub.add_parser(name, help=help_text)

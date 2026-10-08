@@ -33,6 +33,9 @@ oasis_opt = "build/cmake/bin/oasis-opt"
 # it is on PATH inside the env, so the bare name resolves.
 verilator = "verilator"
 
+# Yosys (alternative synthesis tool: resource counts, no timing)
+yosys = "yosys"
+
 # Vivado (simulation with xsim, synthesis with vivado)
 vivado = "vivado"
 xvlog = "xvlog"
@@ -60,3 +63,12 @@ clock_mhz = 200
 # Synthesizing Calyx's `main` instead would keep the memories internal with no outputs but
 # `done`, so Vivado would optimise most of the design away.
 synth_top = "{top}"
+# Synthesis tool, used by `oasis tb` (scripts), `--synth`/`oasis synth` and `oasis report`.
+# Override per run with OASIS_SYNTH_TOOL=yosys.
+#   "vivado": out-of-context synthesis of `part`: LUT/FF/DSP/BRAM/URAM, WNS and Fmax.
+#   "yosys":  `synth_xilinx -family <yosys_family>`: cell counts only (no timing). Yosys maps
+#             carry chains to CARRY4 even for UltraScale+ (2 x CARRY4 ~ 1 x CARRY8), and its
+#             LUT counts run higher than Vivado's, so compare Yosys numbers with each other.
+synth_tool = "vivado"
+# Xilinx family of `part` for Yosys: xcup (UltraScale+), xcu (UltraScale), xc7 (7-series).
+yosys_family = "xcup"

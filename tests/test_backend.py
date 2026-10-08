@@ -1,5 +1,6 @@
 """Testbench/script generation and Vivado report parsing. Never runs Vivado."""
 
+import json
 import os
 import shutil
 
@@ -261,6 +262,98 @@ def test_synth_scripts_drop_stale_reports(tmp_path):
     write_synth_scripts(tmp_path, design, "forward", Toolchain(tools={"vivado": "sh"}))
     assert not any((tmp_path / n).exists() for n in ("utilization.rpt", "timing.rpt", "synth.log"))
     assert (tmp_path / "run_synth.sh").exists()
+
+
+def test_sort_modules_fixed_order():
+    """RTL in any module order comes out identical: `define text first, modules by name."""
+    from oasis.backend.fixups import sort_modules
+
+    a = "module b; endmodule\n"
+    b = "// width of this module's bus\n`define W 8\nmodule a #(parameter X = `W) (); endmodule\n"
+    c = 'module c; initial $display("module x;"); endmodule\n'
+    one = sort_modules("// Compiled by morty-0.9.0 / 2026-10-08\n" + a + b + c)
+    two = sort_modules(c + b + "// Compiled by morty-0.9.0 / 2026-10-09\n" + a)
+    assert one == two
+    assert "morty" not in one and one.index("`define W 8") < one.index("module a")
+    assert one.index("module a") < one.index("module b") < one.index("module c")
+
+
+def test_parse_yosys_stat():
+    from oasis.backend.yosys import parse_stat
+
+    stat = {
+        "design": {
+            "num_cells_by_type": {
+                "$scopeinfo": 9,
+                "LUT2": 3,
+                "LUT6": 4,
+                "FDRE": 5,
+                "FDSE": 1,
+                "CARRY4": 8,
+                "DSP48E2": 2,
+                "MUXF7": 2,
+                "MUXF9": 1,
+                "RAM64M": 1,
+                "RAMB36E2": 1,
+                "RAMB18E2": 1,
+                "INV": 1,
+            }
+        }
+    }
+    r = parse_stat(json.dumps(stat))
+    assert (r["lut"], r["ff"], r["carry4"], r["dsp"], r["muxf"]) == (7, 6, 8, 2, 3)
+    assert (r["lutram"], r["bram"], r["uram"]) == (1, 1.5, 0)
+    assert "$scopeinfo" not in r["cells"] and r["cells"]["INV"] == 1
+
+
+def test_yosys_synth_scripts(tmp_path):
+    """synth.ys targets the configured family out of context; old results are removed."""
+    from oasis.backend.yosys import write_synth_scripts
+    from oasis.config import FpgaTarget, Toolchain
+
+    (tmp_path / "stat.json").write_text("{}")
+    design = tmp_path / "design_synth.sv"
+    design.write_text("module forward; endmodule\n")
+    tc = Toolchain(tools={"yosys": "sh"}, fpga=FpgaTarget(yosys_family="xcup"))
+    script = write_synth_scripts(tmp_path, design, "forward", tc)
+    ys = (tmp_path / "synth.ys").read_text()
+    assert "synth_xilinx -family xcup -top forward -noiopad -noclkbuf -flatten" in ys
+    assert "tee -o stat.json stat -json" in ys and str(design.resolve()) in ys
+    assert script.name == "run_yosys.sh" and not (tmp_path / "stat.json").exists()
+
+
+def test_compile_synth_with_yosys(tmp_path, monkeypatch, capsys):
+    """[fpga] synth_tool = yosys: tb writes only Yosys scripts, --synth runs and reports them."""
+    pytest.importorskip("torch_mlir")
+    if not _backend_tools_available():
+        pytest.skip("CIRCT/Calyx tools not configured")
+    from oasis.backend import vivado
+    from oasis.config import Toolchain
+
+    monkeypatch.setenv("OASIS_SYNTH_TOOL", "yosys")
+    real_available, real_resolve = Toolchain.available, Toolchain.resolve
+    monkeypatch.setattr(  # pretend Yosys is installed; everything else is real
+        Toolchain, "available", lambda self, k: k == "yosys" or real_available(self, k)
+    )
+    monkeypatch.setattr(
+        Toolchain, "resolve", lambda self, k: "/bin/true" if k == "yosys" else real_resolve(self, k)
+    )
+    ran = []
+
+    def fake_run_script(script, stage):
+        ran.append(script.name)
+        stat = {"design": {"num_cells_by_type": {"LUT6": 4321, "FDRE": 12, "DSP48E2": 2}}}
+        (script.parent / "stat.json").write_text(json.dumps(stat))
+
+    monkeypatch.setattr(vivado, "run_script", fake_run_script)
+    out = tmp_path / "gemm"
+    assert main(["compile", "gemm", "--out", str(out), "--synth"]) == 0
+    synth = out / "synth"
+    assert ran == ["run_yosys.sh"] and not (synth / "run_synth.sh").exists()
+    assert "--disable-verify" in (synth / "calyx.log").read_text()
+    assert "LUT=4321" in capsys.readouterr().out
+    rep = json.loads((out / "report.json").read_text())["synth"]
+    assert rep["tool"] == "yosys" and rep["lut"] == 4321 and "wns_ns" not in rep
 
 
 def test_sim_uses_selected_simulator(tmp_path, monkeypatch):

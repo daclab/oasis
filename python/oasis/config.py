@@ -36,13 +36,18 @@ def _merge(base: dict, extra: dict) -> dict:
     return out
 
 
+SYNTH_TOOLS = ("vivado", "yosys")
+
+
 @dataclass
 class FpgaTarget:
-    """FPGA part, clock and synthesis top from [fpga]."""
+    """FPGA part, clock, synthesis top and synthesis tool from [fpga]."""
 
     part: str = "xcu55c-fsvh2892-2L-e"
     clock_mhz: float = 200.0
     synth_top: str = "{top}"
+    synth_tool: str = "vivado"  # one of SYNTH_TOOLS
+    yosys_family: str = "xcup"  # `synth_xilinx -family` for `part` (xcup = UltraScale+)
 
     @property
     def period_ns(self) -> float:
@@ -105,6 +110,11 @@ def load_toolchain(directory: Path | None = None) -> Toolchain:
             data = _merge(data, tomllib.loads(path.read_text()))
     sim = data.get("sim", {})
     fpga = data.get("fpga", {})
+    synth_tool = os.environ.get("OASIS_SYNTH_TOOL", fpga.get("synth_tool", FpgaTarget.synth_tool))
+    if synth_tool not in SYNTH_TOOLS:
+        raise ValueError(
+            f"[fpga] synth_tool = '{synth_tool}' is not supported; use one of {SYNTH_TOOLS}"
+        )
     return Toolchain(
         tools=dict(data.get("tools", {})),
         paths=dict(data.get("paths", {})),
@@ -119,6 +129,8 @@ def load_toolchain(directory: Path | None = None) -> Toolchain:
                 os.environ.get("OASIS_CLOCK_MHZ", fpga.get("clock_mhz", FpgaTarget.clock_mhz))
             ),
             synth_top=fpga.get("synth_top", FpgaTarget.synth_top),
+            synth_tool=synth_tool,
+            yosys_family=fpga.get("yosys_family", FpgaTarget.yosys_family),
         ),
     )
 

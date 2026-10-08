@@ -114,6 +114,47 @@ def drop_port_redeclarations(sv: str) -> tuple[str, int]:
     return _MODULE_RE.sub(fix_module, sv), removed
 
 
+# Comments and strings are skipped so `module` inside them doesn't count as a keyword.
+_TOKEN_RE = re.compile(
+    r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\\n])*"|\b(endmodule)\b|\b(module)\s+([A-Za-z_]\w*)',
+    re.DOTALL,
+)
+
+
+def sort_modules(sv: str) -> str:
+    """Rewrite RTL in a fixed order: text between modules first, then modules by name.
+
+    Calyx bundles its primitives (HardFloat) with morty, which emits them in a different
+    order on every run. Yosys's LUT mapping depends on that order (gemm: 2772 to 2957 LUTs
+    over five runs of the same design), so synthesis RTL gets a fixed order. The text
+    between modules (HardFloat's `define constants, comments) moves to the top, identical
+    copies once, in sorted order: macros are global, so defining them first is safe.
+    morty's `// Compiled by morty ... <timestamp>` line is dropped.
+    """
+    modules: list[tuple[str, str]] = []
+    between: list[str] = []
+    start, name, module_start = 0, None, 0
+    for m in _TOKEN_RE.finditer(sv):
+        if m.group(2) and name is None:  # `module NAME`
+            between.append(sv[start : m.start()])
+            name, module_start = m.group(3), m.start()
+        elif m.group(1) and name is not None:  # `endmodule`
+            modules.append((name, sv[module_start : m.end()]))
+            start, name = m.end(), None
+    if not modules:
+        return sv
+    between.append(sv[start:])
+    kept = set()
+    for text in between:
+        text = "\n".join(
+            line for line in text.splitlines() if not line.startswith("// Compiled by morty")
+        ).strip()
+        if text:
+            kept.add(text)
+    header = "".join(f"{text}\n\n" for text in sorted(kept))
+    return header + "\n\n".join(text for _, text in sorted(modules)) + "\n"
+
+
 def vivado_compat_sv(in_path: Path, out_path: Path, ws: Workspace, log: Path) -> None:
     """Fix-up stage: make Calyx's SystemVerilog acceptable to Vivado (xvlog / synthesis)."""
     fixed, n = drop_port_redeclarations(in_path.read_text())

@@ -34,6 +34,12 @@ fud2 = "0.0.2"                                        # crate `fud`, from `cargo
 verilator = "5.052"          # conda-forge build
 vivado = "2023.2"            # SW Build 4029153; xsim, synthesis (user runs only)
 
+[synth]
+# Yosys, for [fpga] synth_tool = "yosys" (cell counts only). Built from source.
+yosys = "0.58+80"
+yosys_repo = "https://github.com/YosysHQ/yosys.git"
+yosys_commit = "37875fdedfeb6a72d2fe830618346e5c695cfe74"   # git describe: v0.58-81-g37875fded
+
 # ---- Build tools for CIRCT and oasis-opt ----
 [build]
 cmake = "3.22.1"             # /usr/bin/cmake (not the Vitis-bundled 3.3.2)

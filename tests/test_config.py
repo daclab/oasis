@@ -62,3 +62,17 @@ def test_pinned_versions_agree():
     assert constraints == {k: v for k, v in pinned.items() if k != "python"}
     for section in ("circt", "llvm", "calyx"):
         assert len(versions["backend"][section]["commit"]) == 40  # full hashes, not short ones
+
+
+def test_synth_tool_choice(tmp_path, monkeypatch):
+    """[fpga] synth_tool picks vivado (default) or yosys; OASIS_SYNTH_TOOL overrides it."""
+    monkeypatch.delenv("OASIS_SYNTH_TOOL", raising=False)
+    assert load_toolchain(tmp_path).fpga.synth_tool == "vivado"
+    (tmp_path / "toolchain.toml").write_text('[fpga]\nsynth_tool = "yosys"\nyosys_family = "xc7"\n')
+    fpga = load_toolchain(tmp_path).fpga
+    assert (fpga.synth_tool, fpga.yosys_family) == ("yosys", "xc7")
+    monkeypatch.setenv("OASIS_SYNTH_TOOL", "vivado")
+    assert load_toolchain(tmp_path).fpga.synth_tool == "vivado"
+    monkeypatch.setenv("OASIS_SYNTH_TOOL", "quartus")
+    with pytest.raises(ValueError, match="synth_tool"):
+        load_toolchain(tmp_path)

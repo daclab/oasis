@@ -15,6 +15,15 @@ def update(out_dir: Path, section: str, values: dict) -> dict:
     return report
 
 
+def replace(out_dir: Path, section: str, values: dict) -> dict:
+    """Set report.json[section] to `values` (dropping its old keys); return the whole report."""
+    path = out_dir / "report.json"
+    report = json.loads(path.read_text()) if path.exists() else {}
+    report[section] = values
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    return report
+
+
 def reset(out_dir: Path) -> None:
     """Start a fresh report.json (a new compile invalidates earlier sim/check/synth results)."""
     (out_dir / "report.json").unlink(missing_ok=True)
@@ -39,7 +48,15 @@ def summary(report: dict) -> str:
             f"  mismatches = {check.get('mismatches')}"
         )
     synth = report.get("synth", {})
-    if synth:
+    if synth.get("tool") == "yosys":
+        util = "  ".join(
+            f"{k.upper()}={synth[k]}"
+            for k in ("lut", "ff", "carry4", "dsp", "muxf", "lutram", "bram", "uram")
+            if synth.get(k)
+        )
+        lines.append(f"synth: {synth.get('top')} with yosys, Xilinx {synth.get('family')}")
+        lines.append(f"       {util}  (cell counts only; no timing)")
+    elif synth:
         util = "  ".join(
             f"{k.upper()}={synth[k]}" for k in ("lut", "ff", "dsp", "bram", "uram") if k in synth
         )

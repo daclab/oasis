@@ -11,7 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from oasis.backend.fixups import drop_port_redeclarations
+from oasis.backend.fixups import drop_port_redeclarations, sort_modules
 from oasis.backend.testbench import fill_template
 from oasis.config import FpgaTarget, Toolchain
 from oasis.stages import StageError, run_tool
@@ -40,22 +40,40 @@ def write_xsim_script(sim_dir: Path, design_sv: Path, tc: Toolchain) -> Path:
     return _write(sim_dir / "run_xsim.sh", text, executable=True)
 
 
-def generate_synth_sv(futil: Path, out_sv: Path, tc: Toolchain, log: Path) -> None:
+def generate_synth_sv(
+    futil: Path, out_sv: Path, tc: Toolchain, log: Path, disable_verify: bool = False
+) -> None:
     """Synthesis RTL: same Calyx program, without $readmemh/$writememh/final (calyx --synthesis).
 
-    Gets the same Vivado-compatibility fix-up as the simulation RTL.
+    Gets the same Vivado-compatibility fix-up as the simulation RTL, and a fixed module order
+    (Calyx's order changes from run to run, and synthesis results depend on it).
+    `disable_verify` drops Calyx's `$fatal` multiple-assignment checks (calyx
+    --disable-verify), which Yosys's SystemVerilog frontend doesn't need; Vivado's synthesis
+    ignores them.
     """
+    flags = ["--synthesis", "--disable-verify"] if disable_verify else ["--synthesis"]
     run_tool(
         "synth_rtl",
         tc.resolve("calyx"),
-        ["-l", str(tc.path("calyx_lib")), "-b", "verilog", "--synthesis", str(futil)],
+        ["-l", str(tc.path("calyx_lib")), "-b", "verilog", *flags, str(futil)],
         out_sv,
         log,
         stdout_to_file=True,
         unlimited_stack=True,
     )
     fixed, _ = drop_port_redeclarations(out_sv.read_text())
-    out_sv.write_text(fixed)
+    out_sv.write_text(sort_modules(fixed))
+
+
+# Everything write_synth_scripts and a Vivado run put in synth/ (besides the RTL).
+SYNTH_FILES = (
+    "clocks.xdc",
+    "synth.tcl",
+    "run_synth.sh",
+    "utilization.rpt",
+    "timing.rpt",
+    "synth.log",
+)
 
 
 def write_synth_scripts(synth_dir: Path, design_sv: Path, top: str, tc: Toolchain) -> Path:
