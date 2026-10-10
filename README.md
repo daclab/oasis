@@ -29,22 +29,20 @@ OASIS is an open-source compiler that lowers PyTorch models to synthesizable RTL
       │  Calyx compiler
       ▼
  SystemVerilog ──▶ Verilator / Vivado xsim simulation ──▶ check vs. PyTorch (bit-exact for integers)
-              └──▶ Vivado synthesis       ──▶ area, timing
-              └──▶ Yosys synthesis        ──▶ cell counts + netlist (no Vivado needed)
+              └──▶ Vivado synthesis       ──▶ gate-level netlist, resource utilization, timing
+              └──▶ Yosys synthesis        ──▶ gate-level netlist, resource utilization
 ```
 
-Every stage writes its output to disk as a numbered file (`00_linalg.mlir`, `01_bufferized.mlir`, … `10_design.sv`), so you can inspect the design at any level of abstraction.
+OASIS exports the Yosys netlist as `synth/netlist.v`. The current Vivado script generates a netlist internally and saves utilization and timing reports; netlist export is not yet enabled.
 
 ## Requirements
-
-Exact versions are pinned in [`config/versions.toml`](config/versions.toml) (all tools) and [`config/constraints.txt`](config/constraints.txt) (pip).
 
 | Dependency | Version pinned | Used for |
 |---|---|---|
 | Linux, Python 3.11 (conda) | Ubuntu 22.04, Python 3.11.17 | everything |
 | torch-mlir (nightly wheel) + PyTorch nightly | torch-mlir 20261001, torch 2.15.0.dev20261002+cpu, torchvision 0.30.0.dev20261002+cpu | frontend (the wheel bundles its own LLVM/MLIR) |
 | CIRCT, with its bundled LLVM/MLIR | CIRCT `a8cf045b3`, LLVM submodule `f091be6d53e4` (22.0.0git) | `circt-opt`, `hlstool`, `circt-translate`; LLVM/MLIR for building `oasis-opt` |
-| Calyx compiler (Rust) | commit `3e595cef` (0.7.1), fud2 0.0.2 | Calyx to SystemVerilog |
+| Calyx compiler | commit `3e595cef` (0.7.1) | Calyx to SystemVerilog |
 | CMake ≥ 3.20, Ninja, a C++17 compiler | CMake 3.22.1, Ninja 1.10.1, GCC 11.4.0 | building CIRCT and `oasis-opt` |
 | AMD Vivado (optional) | 2023.2 | synthesis; xsim as an alternative simulator |
 | Yosys (optional) | 0.58+80 (`37875fded`) | open-source synthesis (cell counts, gate-level netlist), `[fpga] synth_tool = "yosys"` |
@@ -137,7 +135,7 @@ Activate the environment first (`conda activate oasis`) and run from the reposit
 | Command | What it does |
 |---|---|
 | `oasis list` | List the benchmarks and their input sizes |
-| `oasis compile gemm` | PyTorch → RTL (`10_design.sv`), every stage's IR, testbench and Vivado scripts |
+| `oasis compile gemm` | PyTorch → RTL (`10_design.sv`), every stage's IR, testbench, simulation scripts, and selected-backend synthesis scripts |
 | `oasis compile gemm --size medium` | Same, with another input size from `models/data.py` |
 | `oasis compile gemm --sim` | ...then simulate (Verilator) and compare with PyTorch |
 | `oasis compile gemm --sim --simulator xsim` | Same, simulating with Vivado xsim (slower; shows undefined `x` values, useful for debugging) |
@@ -146,7 +144,7 @@ Activate the environment first (`conda activate oasis`) and run from the reposit
 | `oasis compile gemm --no-tb` | Compile only, no testbench |
 | `oasis compile gemm --no-dump-all` | Keep only the files later stages need |
 | `oasis compile gemm --stop-after scf` | Stop after a named stage (e.g. only the frontend) |
-| `oasis tb gemm` | Regenerate the testbench and Vivado scripts only |
+| `oasis tb gemm` | Regenerate the testbench, simulation scripts, and selected-backend synthesis RTL and scripts |
 | `oasis check gemm` | Compare an existing simulation's output with PyTorch |
 | `oasis report gemm` | Re-read existing simulation/synthesis results and print the summary |
 | `oasis tools` | Show where every external tool resolves |
@@ -158,7 +156,7 @@ bash out/gemm_small/sim/run_verilator.sh && oasis check gemm     # simulation + 
 bash out/gemm_small/synth/run_yosys.sh   && oasis report gemm    # default synthesis + report
 ```
 
-**Synthesis defaults to Yosys.** `oasis compile ffnn --synth` generates RTL, runs Yosys, and writes `synth/stat.json` (cell counts) and `synth/netlist.v` (Xilinx primitive netlist). Yosys gives no timing. Select Vivado with `oasis compile ffnn --synth --synth-tool vivado`. For separate steps, use `--synth-tool vivado` on each of `oasis tb`, `oasis synth`, and `oasis report`. The option also works with `oasis run` and `oasis tools`. Precedence is CLI argument → `OASIS_SYNTH_TOOL` → local/global `[fpga] synth_tool` → Yosys. Yosys targets `[fpga] yosys_family` (default `xcup`, UltraScale+); its resource counts should be compared with other Yosys results, not treated as identical to Vivado's.
+**Synthesis supports both Yosys and Vivado.** Use `oasis compile ffnn --synth --synth-tool yosys` or `--synth-tool vivado`. Yosys exports a netlist and resource counts; Vivado produces utilization and timing reports.
 
 ### Results
 
@@ -175,17 +173,26 @@ All outputs of a run go to `out/<benchmark>_<size>/`:
 
 ## Benchmarks
 
+Ordered by approximate model structure complexity, from scalar/elementwise kernels to full transformer models; this is not a runtime or hardware-cost ranking.
+
 | Benchmark | Data type | Description | Status |
 |---|---|---|---|
-| `gemm` | f32 | `C = A @ B`; 32×32 (`small`), PolyBench MEDIUM (`medium`) | RTL, simulated (PASS), synthesized |
-| `relu` | f32 | ReLU(x + y), 1×3×10×10 | RTL and testbench |
-| `ffnn` | f32 | Linear 64→48, ReLU, Linear 48→4; weights as memories | RTL and testbench |
-| `increment` | i32 | a + 1 | RTL and testbench |
-| `gelu` | f32 | GELU(x + y) | Not supported yet: needs an approximation for `math.erf` |
-| `k3mm` | f32 | PolyBench 3mm: `G = (A @ B) @ (C @ D)`; `small` 16–24, PolyBench MEDIUM (`medium`) | **WIP**: added, not compiled yet |
-| `attention` | f32 | Multi-head self-attention (from Stream-HLS); weights as memories | **WIP**: softmax needs `math.exp` |
-| `transformer_block` | f32 | LayerNorm + attention + LayerNorm + feed-forward (ReLU), residuals | **WIP**: softmax (`math.exp`), LayerNorm (runtime `rsqrt`) |
-| `tiny_llm` | f32 | Decoder-only LLM: token/position embeddings, 2 causal blocks, LM head; input = token ids | **WIP**: as `transformer_block`, plus embedding lookup by token id |
+| `increment` | i32 | a + 1 | **PASS** |
+| `relu` | f32 | ReLU(x + y), 1×3×10×10 | **PASS** |
+| `gelu` | f32 | GELU(x + y) | **WIP** |
+| `gemm` | f32 | `C = A @ B`; 32×32 (`small`), PolyBench MEDIUM (`medium`) | **PASS** |
+| `k3mm` | f32 | PolyBench 3mm: `G = (A @ B) @ (C @ D)`; `small` 16–24, PolyBench MEDIUM (`medium`) | **PASS** |
+| `ffnn` | f32 | Linear 64→48, ReLU, Linear 48→4; weights as memories | **PASS** |
+| `resnet_head` | f32 | Global average pooling and fully connected classifier | **WIP** |
+| `resnet_stem` | f32 | Convolution, BatchNorm, ReLU, and max pooling | **WIP** |
+| `resnet_block` | f32 | Two convolutions with an identity shortcut | **WIP** |
+| `resnet_down` | f32 | Downsampling residual block with a projection shortcut | **WIP** |
+| `resnet18` | f32 | Full ResNet-18; 32×32 (`small`) or 224×224 (`large`) input images | **WIP** |
+| `attention` | f32 | Multi-head self-attention (from Stream-HLS); weights as memories | **WIP** |
+| `transformer_block` | f32 | LayerNorm + attention + LayerNorm + feed-forward (ReLU), residuals | **WIP** |
+| `tiny_llm` | f32 | Decoder-only LLM: token/position embeddings, 2 causal blocks, LM head; input = token ids | **WIP** |
+
+**PASS** refers to small-size RTL simulation checked against PyTorch; **WIP** denotes work in progress. Recorded v0 pipeline results used Verilator 5.052: GEMM, ReLU, FFNN, and K3MM on 2026-10-09; increment on 2026-10-06. Synthesized-netlist simulation remains pending.
 
 ### Adding a benchmark
 
@@ -194,17 +201,6 @@ All outputs of a run go to `out/<benchmark>_<size>/`:
 3. Run `oasis compile <name>`.
 
 OASIS generates the inputs from the registered shapes and computes the golden output with PyTorch; the model file never contains inputs or checks.
-
-## Configuration
-
-| File | Contents |
-|---|---|
-| `config/toolchain.toml` | Default tool names, simulation cycle limit, FPGA target and synthesis tool (`[fpga] part`, `clock_mhz`, `synth_top`, `synth_tool`, `yosys_family`) |
-| `config/toolchain.local.toml` | Your machine's tool paths; overrides the defaults (not committed) |
-| `config/pipelines/v0.toml` | The ordered stages and the exact passes/flags of each tool |
-| `models/data.py` | Benchmark registry |
-
-To target another FPGA for one run: `OASIS_FPGA_PART=xc7z020clg484-1 OASIS_CLOCK_MHZ=100 oasis compile gemm --synth`.
 
 ## Repository layout
 
@@ -249,13 +245,23 @@ OASIS/
 └── pyproject.toml                Python package and the `oasis` command
 ```
 
-Generated, not committed: `out/<benchmark>_<size>/` (compile, simulation and synthesis outputs) and `build/` (the `oasis-opt` build).
-
 ## Acknowledgments
 
 OASIS builds on LLVM/MLIR, CIRCT, torch-mlir, Calyx, Verilator and Yosys.
 
-NSF-Funded Research Project | NSF Award #2608702
+OASIS is supported by the National Science Foundation under [Award #2608702](https://www.nsf.gov/awardsearch/showAward?AWD_ID=2608702).
+
+Project investigators:
+
+- **Prof. Md Rubel Ahmed** — Louisiana Tech University, Principal Investigator. [mahmed@latech.edu](mailto:mahmed@latech.edu)
+- **Prof. Rickard F Ewetz** — University of Florida, Co-Principal Investigator. [rewetz@ufl.edu](mailto:rewetz@ufl.edu)
+- **Prof. Hao Zheng** — University of Central Florida, Co-Principal Investigator. [hao.zheng@ucf.edu](mailto:hao.zheng@ucf.edu)
+
+<!--
+## Citation
+
+If you use OASIS in your research, please cite the software using [CITATION.cff](CITATION.cff).
+-->
 
 ## License
 
