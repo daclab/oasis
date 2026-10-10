@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oasis"
-version = "0.2.0"
+version = "0.3.0"
 description = "OASIS: lower PyTorch models to synthesizable RTL via MLIR and CIRCT"
 readme = "README.md"
 license = { text = "MIT" }

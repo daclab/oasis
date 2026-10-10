@@ -100,7 +100,7 @@ def test_compile_and_tb_generation(tmp_path):
     tc = load_toolchain()
     if not all(tc.available(k) for k in ("vivado", "xvlog", "xelab", "xsim")):
         pytest.skip("Vivado not configured")
-    assert main(["tb", "gemm", "--out", str(out)]) == 0
+    assert main(["tb", "gemm", "--out", str(out), "--synth-tool", "vivado"]) == 0
     for f in ("tb.sv", "mem_0.dat", "mem_1.dat", "mem_2.dat", "memmap.json", "run_xsim.sh"):
         assert (out / "sim" / f).exists(), f
     for f in ("design_synth.sv", "synth.tcl", "clocks.xdc", "run_synth.sh"):
@@ -168,7 +168,10 @@ def test_compile_sim_synth_flags(tmp_path, monkeypatch, capsys):
     _need_backend()
     calls = _fake_vivado(monkeypatch)
     out = tmp_path / "gemm"
-    assert main(["compile", "gemm", "--out", str(out), "--sim", "--syn"]) == 0
+    assert (
+        main(["compile", "gemm", "--out", str(out), "--sim", "--syn", "--synth-tool", "vivado"])
+        == 0
+    )
     assert calls == ["sim", "synth"]
     text = capsys.readouterr().out
     assert "sim:   1234 cycles" in text and "check: PASS" in text and "LUT=4321" in text
@@ -312,6 +315,7 @@ def test_yosys_synth_scripts(tmp_path):
     from oasis.config import FpgaTarget, Toolchain
 
     (tmp_path / "stat.json").write_text("{}")
+    (tmp_path / "netlist.v").write_text("module forward; endmodule\n")
     design = tmp_path / "design_synth.sv"
     design.write_text("module forward; endmodule\n")
     tc = Toolchain(tools={"yosys": "sh"}, fpga=FpgaTarget(yosys_family="xcup"))
@@ -319,7 +323,9 @@ def test_yosys_synth_scripts(tmp_path):
     ys = (tmp_path / "synth.ys").read_text()
     assert "synth_xilinx -family xcup -top forward -noiopad -noclkbuf -flatten" in ys
     assert "tee -o stat.json stat -json" in ys and str(design.resolve()) in ys
-    assert script.name == "run_yosys.sh" and not (tmp_path / "stat.json").exists()
+    assert "write_verilog -noattr netlist.v" in ys
+    assert script.name == "run_yosys.sh"
+    assert not (tmp_path / "stat.json").exists() and not (tmp_path / "netlist.v").exists()
 
 
 def test_compile_synth_with_yosys(tmp_path, monkeypatch, capsys):
@@ -330,7 +336,7 @@ def test_compile_synth_with_yosys(tmp_path, monkeypatch, capsys):
     from oasis.backend import vivado
     from oasis.config import Toolchain
 
-    monkeypatch.setenv("OASIS_SYNTH_TOOL", "yosys")
+    monkeypatch.delenv("OASIS_SYNTH_TOOL", raising=False)
     real_available, real_resolve = Toolchain.available, Toolchain.resolve
     monkeypatch.setattr(  # pretend Yosys is installed; everything else is real
         Toolchain, "available", lambda self, k: k == "yosys" or real_available(self, k)
@@ -344,6 +350,7 @@ def test_compile_synth_with_yosys(tmp_path, monkeypatch, capsys):
         ran.append(script.name)
         stat = {"design": {"num_cells_by_type": {"LUT6": 4321, "FDRE": 12, "DSP48E2": 2}}}
         (script.parent / "stat.json").write_text(json.dumps(stat))
+        (script.parent / "netlist.v").write_text("module forward; endmodule\n")
 
     monkeypatch.setattr(vivado, "run_script", fake_run_script)
     out = tmp_path / "gemm"
@@ -351,9 +358,11 @@ def test_compile_synth_with_yosys(tmp_path, monkeypatch, capsys):
     synth = out / "synth"
     assert ran == ["run_yosys.sh"] and not (synth / "run_synth.sh").exists()
     assert "--disable-verify" in (synth / "calyx.log").read_text()
-    assert "LUT=4321" in capsys.readouterr().out
+    text = capsys.readouterr().out
+    assert "LUT=4321" in text and "netlist: synth/netlist.v" in text
     rep = json.loads((out / "report.json").read_text())["synth"]
     assert rep["tool"] == "yosys" and rep["lut"] == 4321 and "wns_ns" not in rep
+    assert rep["netlist"] == "synth/netlist.v"
 
 
 def test_sim_uses_selected_simulator(tmp_path, monkeypatch):

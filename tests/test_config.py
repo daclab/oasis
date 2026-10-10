@@ -65,9 +65,9 @@ def test_pinned_versions_agree():
 
 
 def test_synth_tool_choice(tmp_path, monkeypatch):
-    """[fpga] synth_tool picks vivado (default) or yosys; OASIS_SYNTH_TOOL overrides it."""
+    """[fpga] synth_tool picks yosys (default) or vivado; OASIS_SYNTH_TOOL overrides it."""
     monkeypatch.delenv("OASIS_SYNTH_TOOL", raising=False)
-    assert load_toolchain(tmp_path).fpga.synth_tool == "vivado"
+    assert load_toolchain(tmp_path).fpga.synth_tool == "yosys"
     (tmp_path / "toolchain.toml").write_text('[fpga]\nsynth_tool = "yosys"\nyosys_family = "xc7"\n')
     fpga = load_toolchain(tmp_path).fpga
     assert (fpga.synth_tool, fpga.yosys_family) == ("yosys", "xc7")
@@ -76,3 +76,19 @@ def test_synth_tool_choice(tmp_path, monkeypatch):
     monkeypatch.setenv("OASIS_SYNTH_TOOL", "quartus")
     with pytest.raises(ValueError, match="synth_tool"):
         load_toolchain(tmp_path)
+
+
+def test_synth_argument_overrides_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("OASIS_SYNTH_TOOL", "yosys")
+    assert load_toolchain(tmp_path, synth_tool="vivado").fpga.synth_tool == "vivado"
+
+
+@pytest.mark.parametrize("command", ["compile", "tb", "synth", "report", "run", "tools"])
+def test_cli_synth_tool_override(command, monkeypatch):
+    from oasis.cli import _toolchain, build_parser
+
+    monkeypatch.setenv("OASIS_SYNTH_TOOL", "yosys")
+    argv = [command] + ([] if command == "tools" else ["ffnn"])
+    args = build_parser().parse_args([*argv, "--synth-tool", "vivado"])
+    assert _toolchain(args).fpga.synth_tool == "vivado"
+    assert load_toolchain().fpga.synth_tool == "yosys"

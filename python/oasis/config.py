@@ -46,7 +46,7 @@ class FpgaTarget:
     part: str = "xcu55c-fsvh2892-2L-e"
     clock_mhz: float = 200.0
     synth_top: str = "{top}"
-    synth_tool: str = "vivado"  # one of SYNTH_TOOLS
+    synth_tool: str = "yosys"  # one of SYNTH_TOOLS
     yosys_family: str = "xcup"  # `synth_xilinx -family` for `part` (xcup = UltraScale+)
 
     @property
@@ -100,8 +100,8 @@ class Toolchain:
         return True
 
 
-def load_toolchain(directory: Path | None = None) -> Toolchain:
-    """Read toolchain.toml, layer toolchain.local.toml on top, return a Toolchain."""
+def load_toolchain(directory: Path | None = None, *, synth_tool: str | None = None) -> Toolchain:
+    """Load config and environment overrides; an explicit synth_tool takes precedence."""
     directory = directory or config_dir()
     data: dict = {}
     for name in ("toolchain.toml", "toolchain.local.toml"):
@@ -110,7 +110,9 @@ def load_toolchain(directory: Path | None = None) -> Toolchain:
             data = _merge(data, tomllib.loads(path.read_text()))
     sim = data.get("sim", {})
     fpga = data.get("fpga", {})
-    synth_tool = os.environ.get("OASIS_SYNTH_TOOL", fpga.get("synth_tool", FpgaTarget.synth_tool))
+    synth_tool = synth_tool or os.environ.get(
+        "OASIS_SYNTH_TOOL", fpga.get("synth_tool", FpgaTarget.synth_tool)
+    )
     if synth_tool not in SYNTH_TOOLS:
         raise ValueError(
             f"[fpga] synth_tool = '{synth_tool}' is not supported; use one of {SYNTH_TOOLS}"

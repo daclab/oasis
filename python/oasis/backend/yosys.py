@@ -1,7 +1,8 @@
-"""Yosys: an open-source alternative to Vivado synthesis (cell counts only, no timing).
+"""Yosys: an open-source alternative to Vivado synthesis (cell counts and netlist, no timing).
 
-`synth_xilinx -family <yosys_family>` maps the kernel to Xilinx primitives, and `stat -json`
-counts them. Same RTL as Vivado's synthesis (calyx --synthesis), plus --disable-verify:
+`synth_xilinx -family <yosys_family>` maps the kernel to Xilinx primitives, `stat -json`
+counts them and `write_verilog` saves the gate-level netlist (synth/netlist.v). Same RTL
+as Vivado's synthesis (calyx --synthesis), plus --disable-verify:
     bash out/<bench>_<size>/synth/run_yosys.sh
 
 Counts are not Vivado's: Yosys maps carry chains to CARRY4 even for UltraScale+ (two CARRY4
@@ -18,7 +19,7 @@ from pathlib import Path
 from oasis.backend.testbench import fill_template
 from oasis.config import Toolchain
 
-RESULTS = ("stat.json", "yosys.log")
+RESULTS = ("stat.json", "netlist.v", "yosys.log")
 # Everything write_synth_scripts and a Yosys run put in synth/ (besides the RTL).
 SYNTH_FILES = ("synth.ys", "run_yosys.sh", *RESULTS)
 

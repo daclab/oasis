@@ -40,7 +40,7 @@ BENCHMARKS = {
         "model": "polybench/k3mm.py:k3mm",
         "dtype": "f32",
         "status": "wip",
-        "note": "new; not compiled yet (matmuls only, like gemm)",
+        "note": "small: Verilator check PASS 2026-10-09; medium and Vivado not run yet",
         "inputs": {
             # NI, NJ, NK, NL, NM = 16, 18, 20, 22, 24 (all different, to catch index mix-ups)
             "small": [(16, 20), (20, 18), (18, 24), (24, 22)],

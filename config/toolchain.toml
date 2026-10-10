@@ -64,11 +64,11 @@ clock_mhz = 200
 # `done`, so Vivado would optimise most of the design away.
 synth_top = "{top}"
 # Synthesis tool, used by `oasis tb` (scripts), `--synth`/`oasis synth` and `oasis report`.
-# Override per run with OASIS_SYNTH_TOOL=yosys.
+# Override per run with --synth-tool vivado (or OASIS_SYNTH_TOOL).
 #   "vivado": out-of-context synthesis of `part`: LUT/FF/DSP/BRAM/URAM, WNS and Fmax.
 #   "yosys":  `synth_xilinx -family <yosys_family>`: cell counts only (no timing). Yosys maps
 #             carry chains to CARRY4 even for UltraScale+ (2 x CARRY4 ~ 1 x CARRY8), and its
 #             LUT counts run higher than Vivado's, so compare Yosys numbers with each other.
-synth_tool = "vivado"
+synth_tool = "yosys"
 # Xilinx family of `part` for Yosys: xcup (UltraScale+), xcu (UltraScale), xc7 (7-series).
 yosys_family = "xcup"

@@ -4,7 +4,7 @@
 
 OASIS is an open-source compiler that lowers PyTorch models to synthesizable RTL for FPGAs and ASICs. It is built on [MLIR](https://mlir.llvm.org/) and [CIRCT](https://circt.llvm.org/), and it keeps the whole flow inside a multi-level IR stack instead of handing generated C/C++ to a high-level synthesis (HLS) tool. Optimization intent such as tiling, memory layout, parallelism and precision is carried as explicit IR structure and attributes, so later stages don't have to re-infer it from general-purpose code.
 
-> **Status: early development (v0.1).** One complete, tested path works: a small PyTorch model (`gemm`, f32) to SystemVerilog, simulated in Vivado and checked against PyTorch. Interfaces and pass pipelines will change.
+> **Status: early development (v0.3.0).** GEMM, ReLU, FFNN, and K3MM small-size RTL simulations passed against PyTorch using Verilator 5.052 on 2026-10-09. Yosys is the default synthesis backend and exports a gate-level netlist; Vivado is selectable with `--synth-tool vivado`. Netlist simulation remains pending. Interfaces and pass pipelines will change.
 
 ---
 
@@ -30,7 +30,7 @@ OASIS is an open-source compiler that lowers PyTorch models to synthesizable RTL
       ▼
  SystemVerilog ──▶ Verilator / Vivado xsim simulation ──▶ check vs. PyTorch (bit-exact for integers)
               └──▶ Vivado synthesis       ──▶ area, timing
-              └──▶ Yosys synthesis        ──▶ cell counts (no Vivado needed)
+              └──▶ Yosys synthesis        ──▶ cell counts + netlist (no Vivado needed)
 ```
 
 Every stage writes its output to disk as a numbered file (`00_linalg.mlir`, `01_bufferized.mlir`, … `10_design.sv`), so you can inspect the design at any level of abstraction.
@@ -47,7 +47,7 @@ Exact versions are pinned in [`config/versions.toml`](config/versions.toml) (all
 | Calyx compiler (Rust) | commit `3e595cef` (0.7.1), fud2 0.0.2 | Calyx to SystemVerilog |
 | CMake ≥ 3.20, Ninja, a C++17 compiler | CMake 3.22.1, Ninja 1.10.1, GCC 11.4.0 | building CIRCT and `oasis-opt` |
 | AMD Vivado (optional) | 2023.2 | synthesis; xsim as an alternative simulator |
-| Yosys (optional) | 0.58+80 (`37875fded`) | open-source synthesis (cell counts), `[fpga] synth_tool = "yosys"` |
+| Yosys (optional) | 0.58+80 (`37875fded`) | open-source synthesis (cell counts, gate-level netlist), `[fpga] synth_tool = "yosys"` |
 | Verilator ≥ 5 | 5.052 | simulation (`conda install -n oasis -c conda-forge verilator`) |
 
 ## Installation
@@ -155,10 +155,10 @@ The simulation and synthesis runs can also be started by hand. `oasis compile` p
 
 ```bash
 bash out/gemm_small/sim/run_verilator.sh && oasis check gemm     # simulation + check (or run_xsim.sh)
-bash out/gemm_small/synth/run_synth.sh   && oasis report gemm    # synthesis + report (or run_yosys.sh)
+bash out/gemm_small/synth/run_yosys.sh   && oasis report gemm    # default synthesis + report
 ```
 
-**Synthesis without Vivado.** Set `[fpga] synth_tool = "yosys"` in `config/toolchain.local.toml` (or `OASIS_SYNTH_TOOL=yosys` for one run) and `[tools] yosys` to your Yosys binary. `oasis tb` then writes `synth/run_yosys.sh`, which runs `synth_xilinx -family <yosys_family>` (default `xcup`, UltraScale+) and writes `stat.json`; `oasis report` reads it. Yosys gives cell counts only, no timing. It maps carry chains to `CARRY4` even on UltraScale+ (2 × `CARRY4` ≈ 1 × `CARRY8`), and its LUT counts run higher than Vivado's, so compare Yosys numbers with each other.
+**Synthesis defaults to Yosys.** `oasis compile ffnn --synth` generates RTL, runs Yosys, and writes `synth/stat.json` (cell counts) and `synth/netlist.v` (Xilinx primitive netlist). Yosys gives no timing. Select Vivado with `oasis compile ffnn --synth --synth-tool vivado`. For separate steps, use `--synth-tool vivado` on each of `oasis tb`, `oasis synth`, and `oasis report`. The option also works with `oasis run` and `oasis tools`. Precedence is CLI argument → `OASIS_SYNTH_TOOL` → local/global `[fpga] synth_tool` → Yosys. Yosys targets `[fpga] yosys_family` (default `xcup`, UltraScale+); its resource counts should be compared with other Yosys results, not treated as identical to Vivado's.
 
 ### Results
 
@@ -169,7 +169,7 @@ All outputs of a run go to `out/<benchmark>_<size>/`:
 | `NN_<stage>.*` | IR of every stage, ending with `10_design.sv` (the RTL) |
 | `inputs.npz`, `golden.npy` | Inputs and the expected output from PyTorch |
 | `sim/` | Testbench, memory files, simulation log (`sim.log`) and simulated output |
-| `synth/` | Synthesis RTL and scripts: Vivado (`run_synth.sh`, `utilization.rpt`, `timing.rpt`) or Yosys (`run_yosys.sh`, `stat.json`) |
+| `synth/` | Synthesis RTL and scripts: Vivado (`run_synth.sh`, `utilization.rpt`, `timing.rpt`) or Yosys (`run_yosys.sh`, `stat.json`, `netlist.v`) |
 | `report.json` | Summary: cycles, check result, resources, timing |
 | `logs/` | The command and output of each stage; `logs/linalg.log` also holds the FX graph before and after decomposition |
 

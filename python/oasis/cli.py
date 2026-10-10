@@ -37,6 +37,10 @@ from oasis.stages import StageError, Workspace, check_handoff, run_tool
 from oasis.verify import compare, golden, save_golden
 
 
+def _toolchain(args: argparse.Namespace):
+    return load_toolchain(synth_tool=getattr(args, "synth_tool", None))
+
+
 def _workspace(args: argparse.Namespace, dump_all: bool = False):
     """(benchmark, workspace) for the benchmark/size/out arguments shared by all commands."""
     bench = load_benchmark(args.benchmark, args.size)
@@ -51,7 +55,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
             "compile",
             "--sim/--synth need the full compile and the testbench (drop --no-tb / --stop-after)",
         )
-    toolchain = load_toolchain()
+    toolchain = _toolchain(args)
     pipeline = load_pipeline(Path(args.pipeline) if args.pipeline else None)
     bench, ws = _workspace(args, dump_all=args.dump_all)
 
@@ -139,14 +143,14 @@ def cmd_compile(args: argparse.Namespace) -> int:
         print("simulation (Vivado xsim):")
         rc = cmd_sim(args)  # 2 = simulation ran but the check failed; still run synthesis
     if args.synth:
-        print(f"synthesis ({load_toolchain().fpga.synth_tool}):")
+        print(f"synthesis ({_toolchain(args).fpga.synth_tool}):")
         rc = cmd_synth(args) or rc
     return rc
 
 
 def cmd_tb(args: argparse.Namespace) -> int:
     """Write sim/ (testbench, memory files, one script per installed simulator) and synth/."""
-    tc = load_toolchain()
+    tc = _toolchain(args)
     bench, ws = _workspace(args)
     top = report.load(ws.out).get("compile", {}).get("top", "forward")
 
@@ -194,7 +198,7 @@ def cmd_tb(args: argparse.Namespace) -> int:
     if synth_script:
         print(
             f"synthesis ({tool}): bash {synth_script}    "
-            f"then: oasis report {bench.name} --size {bench.size}"
+            f"then: oasis report {bench.name} --size {bench.size} --synth-tool {tool}"
         )
         target = tc.fpga.yosys_family if tool == "yosys" else tc.fpga.part
         print(f"           top = {synth_top}, target = {target}")
@@ -238,7 +242,7 @@ def _check(bench, ws: Workspace) -> bool:
 
 def cmd_sim(args: argparse.Namespace) -> int:
     bench, ws = _workspace(args)
-    simulator = getattr(args, "simulator", None) or load_toolchain().simulator
+    simulator = getattr(args, "simulator", None) or _toolchain(args).simulator
     script = ws.out / "sim" / f"run_{simulator}.sh"
     if not script.exists():
         raise StageError(
@@ -261,9 +265,9 @@ _SYNTH_SCRIPT = {"vivado": "run_synth.sh", "yosys": "run_yosys.sh"}
 _SYNTH_RESULT = {"vivado": "utilization.rpt", "yosys": "stat.json"}
 
 
-def _collect_synth(ws: Workspace) -> None:
+def _collect_synth(ws: Workspace, args: argparse.Namespace) -> None:
     """Synthesis results of the configured tool -> report.json (replacing earlier ones)."""
-    tc = load_toolchain()
+    tc = _toolchain(args)
     top = report.load(ws.out).get("compile", {}).get("top", "forward")
     if tc.fpga.synth_tool == "yosys":
         stat = ws.out / "synth" / "stat.json"
@@ -275,6 +279,9 @@ def _collect_synth(ws: Workspace) -> None:
             "top": tc.fpga.synth_top.format(top=top),
             "family": tc.fpga.yosys_family,
         }
+        netlist = ws.out / "synth" / "netlist.v"
+        if netlist.exists():
+            values["netlist"] = str(netlist.relative_to(ws.out))
         report.replace(ws.out, "synth", values)
         return
     synth_dir = ws.out / "synth"
@@ -296,11 +303,11 @@ def _collect_synth(ws: Workspace) -> None:
 
 def cmd_synth(args: argparse.Namespace) -> int:
     _, ws = _workspace(args)
-    script = ws.out / "synth" / _SYNTH_SCRIPT[load_toolchain().fpga.synth_tool]
+    script = ws.out / "synth" / _SYNTH_SCRIPT[_toolchain(args).fpga.synth_tool]
     if not script.exists():
         raise StageError("synth", f"{script} not found; run `oasis tb` (see `oasis tools`)")
     vivado.run_script(script, "synth")
-    _collect_synth(ws)
+    _collect_synth(ws, args)
     print(report.summary(report.load(ws.out)))
     return 0
 
@@ -310,8 +317,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     bench, ws = _workspace(args)
     if (ws.out / "sim" / "sim.log").exists():
         _check(bench, ws)
-    if (ws.out / "synth" / _SYNTH_RESULT[load_toolchain().fpga.synth_tool]).exists():
-        _collect_synth(ws)
+    if (ws.out / "synth" / _SYNTH_RESULT[_toolchain(args).fpga.synth_tool]).exists():
+        _collect_synth(ws, args)
     print(report.summary(report.load(ws.out)))
     return 0
 
@@ -335,7 +342,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_tools(args: argparse.Namespace) -> int:
     """Print how each configured tool and path resolves."""
-    tc = load_toolchain()
+    tc = _toolchain(args)
     print(f"frontend runner: {tc.frontend_runner}")
     print(f"simulator:       {tc.simulator} (cycle limit {tc.cycle_limit})")
     print(f"fpga:            {tc.fpga.part} @ {tc.fpga.clock_mhz:g} MHz, top {tc.fpga.synth_top}")
@@ -353,6 +360,14 @@ def cmd_tools(args: argparse.Namespace) -> int:
             where = "NOT FOUND"
         print(f"  {key:<18} {where}")
     return 0
+
+
+def _synth_tool_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--synth-tool",
+        choices=["yosys", "vivado"],
+        help="synthesis backend (overrides environment/config; default: yosys)",
+    )
 
 
 def _simulator_arg(p: argparse.ArgumentParser) -> None:
@@ -406,6 +421,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pipeline", help="pipeline TOML (default: config/pipelines/v0.toml)")
     p.add_argument("--top", default="forward", help="top-level function name (default: forward)")
     p.add_argument("--stop-after", metavar="STAGE", help="stop after the named stage")
+    _synth_tool_arg(p)
     p.set_defaults(func=cmd_compile)
 
     for name, func, help_text in (
@@ -417,6 +433,8 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         p = sub.add_parser(name, help=help_text)
         _bench_args(p)
+        if name in ("tb", "synth", "report"):
+            _synth_tool_arg(p)
         if name == "sim":
             _simulator_arg(p)
         p.set_defaults(func=func)
@@ -425,12 +443,14 @@ def build_parser() -> argparse.ArgumentParser:
     _bench_args(p)
     _simulator_arg(p)
     p.add_argument("--top", default="forward", help="top-level function name (default: forward)")
+    _synth_tool_arg(p)
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("list", help="list benchmarks from models/data.py")
     p.set_defaults(func=cmd_list)
 
     p = sub.add_parser("tools", help="show how configured external tools resolve")
+    _synth_tool_arg(p)
     p.set_defaults(func=cmd_tools)
     return parser
 

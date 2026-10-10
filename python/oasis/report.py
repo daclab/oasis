@@ -55,7 +55,9 @@ def summary(report: dict) -> str:
             if synth.get(k)
         )
         lines.append(f"synth: {synth.get('top')} with yosys, Xilinx {synth.get('family')}")
-        lines.append(f"       {util}  (cell counts only; no timing)")
+        lines.append(f"       {util}  (no timing)")
+        if synth.get("netlist"):
+            lines.append(f"       netlist: {synth['netlist']}")
     elif synth:
         util = "  ".join(
             f"{k.upper()}={synth[k]}" for k in ("lut", "ff", "dsp", "bram", "uram") if k in synth
