@@ -69,3 +69,13 @@ def test_extra_memories_are_buffers():
 def test_no_main_component():
     with pytest.raises(MemMapError, match="main"):
         parse_memories("module {}")
+
+
+def test_float_model_with_integer_scratch_buffer(tmp_path):
+    from oasis.backend.testbench import write_sim_dir
+
+    mixed = CALYX.replace("<[1024] x 32>", "<[1024] x 64>", 1)
+    inputs, output = _tensors()
+    memories = bind(parse_memories(mixed), inputs[:1], output)
+    write_sim_dir(tmp_path, memories, inputs[:1], "f32", 200, 1000)
+    assert (tmp_path / "mem_2.dat").read_text().splitlines() == ["0000000000000000"] * 1024

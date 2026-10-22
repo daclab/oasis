@@ -56,7 +56,10 @@ def write_sim_dir(
     for mem in memories:
         if mem.role == "input":
             data = inputs[mem.arg_index]
+            write_dat(sim_dir / f"{mem.name}.dat", data, dtype, mem.width)
         else:  # output, or an intermediate buffer
-            data = np.zeros(mem.shape, dtype=np.float32 if dtype == "f32" else np.int64)
-        write_dat(sim_dir / f"{mem.name}.dat", data, dtype, mem.width)
+            # Buffers may hold integer indices even in a floating-point model.
+            # All-bits-zero initializes either kind without assuming the model dtype.
+            digits = (mem.width + 3) // 4
+            (sim_dir / f"{mem.name}.dat").write_text(("0" * digits + "\n") * mem.size)
     memmap.save(memories, sim_dir / "memmap.json")
