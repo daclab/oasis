@@ -43,6 +43,8 @@ kind = "frontend"
 handoff = true
 passes = [
   "lower-affine",
+  # OASIS Python IR rewrite, dispatched by the frontend runner (not an upstream pass).
+  "oasis-approx-math",
   "canonicalize",
   "cse",
 ]
@@ -114,6 +116,8 @@ args = ["-l", "{calyx_lib}", "-b", "verilog", "{in}"]
 # Vivado rejects a port re-declared as a wire in the module body (VRFC 10-9336), which
 # Calyx's HardFloat divider does (`output sqrtOpOut` ... `wire sqrtOpOut;`). Drop those
 # redundant lines. This is the RTL the testbench and synthesis use.
+# Also repair the pinned Calyx std_divSqrtFN go/done handshake; the same
+# prepare_rtl function is used for separately generated synthesis RTL.
 [[stage]]
 name = "design"
 kind = "fixup"

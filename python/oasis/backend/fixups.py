@@ -6,10 +6,14 @@ because no CIRCT Python bindings are built, and they fail loudly rather than gue
 
 from __future__ import annotations
 
+import json
 import re
 import struct
+from hashlib import sha256
+from importlib import resources
 from pathlib import Path
 
+from oasis.config import Toolchain, load_toolchain
 from oasis.stages import StageError, Workspace
 
 # calyx.constant @cst_1 <0xFF800000 : f32> : i32      (hex for values MLIR prints that way)
@@ -63,17 +67,49 @@ def float_consts_to_bits(futil: str, consts: dict[str, tuple[int, int]]) -> str:
     return _FUTIL_FLOAT_CONST_RE.sub(replace, futil)
 
 
-def calyx_float_consts(in_path: Path, out_path: Path, ws: Workspace, log: Path) -> None:
+def calyx_float_consts(
+    in_path: Path,
+    out_path: Path,
+    ws: Workspace,
+    log: Path,
+    toolchain: Toolchain | None = None,
+) -> None:
     """Fix-up stage: exact float constants in the exported .futil."""
     consts = exact_float_consts(ws.find("calyx").read_text())
     text = in_path.read_text()
     try:
         fixed = float_consts_to_bits(text, consts)
+        if 'import "primitives/float/divSqrtFN.futil";' in fixed:
+            tc = toolchain if toolchain is not None else load_toolchain()
+            fixed = dynamic_divsqrt_import(fixed, tc.path("calyx_lib"))
     except ValueError as e:
         raise StageError("futil", str(e), log) from e
     n = len(_FUTIL_FLOAT_CONST_RE.findall(text))
     log.write_text(f"replaced {n} std_float_const with exact std_const bits\n")
     out_path.write_text(fixed)
+
+
+def dynamic_divsqrt_import(futil: str, calyx_lib: Path) -> str:
+    """Remove the divider's fixed interval before Calyx can promote its control.
+
+    Inline its extern declaration with a config-resolved RTL path. HardFloat
+    and the installed Calyx tree are untouched; prepare_rtl repairs the wrapper.
+    """
+    directive = 'import "primitives/float/divSqrtFN.futil";'
+    if directive not in futil:
+        return futil
+    path = calyx_lib / "primitives" / "float" / "divSqrtFN.futil"
+    declaration = path.read_text()
+    digest = sha256(re.sub(r"\s+", "", declaration).encode()).hexdigest()
+    if digest != "78b50771d1dcc3c3ed0ff08d4b24f1e6a18a18b4eda0b0797b4b57ddedebda04":
+        raise ValueError("unrecognized Calyx divider declaration; review its timing contract")
+    declaration = declaration.replace("@interval(32) ", "")
+    rtl_path = json.dumps(str(path.with_suffix(".sv").resolve()))
+    declaration = declaration.replace('"divSqrtFN.sv"', rtl_path)
+    futil = futil.replace(directive, "")
+    imports = list(re.finditer(r'^import "[^"\n]+";\s*', futil, re.MULTILINE))
+    position = imports[-1].end() if imports else 0
+    return futil[:position] + declaration + "\n" + futil[position:]
 
 
 _MODULE_RE = re.compile(r"\bmodule\b(.*?)\bendmodule\b", re.DOTALL)
@@ -112,6 +148,60 @@ def drop_port_redeclarations(sv: str) -> tuple[str, int]:
         return text[:header_end] + pattern.sub(drop, body)
 
     return _MODULE_RE.sub(fix_module, sv), removed
+
+
+_DIVSQRT_RE = re.compile(r"\bmodule\s+std_divSqrtFN\s*#\(.*?\bendmodule\b", re.DOTALL)
+# Calyx 3e595cefd8d4f47c4e9b51feae56651b1874ee94, after morty expands macros.
+# Ignore formatting/comments, but fail closed on any unexpected code change.
+_DIVSQRT_ORIGINAL_SHA = "f1e3c834a363bdf1ec7c5610ea76a3622778b7f0f38afc6007bf03803ce82cd0"
+
+
+def _sv_code(text: str) -> str:
+    return re.sub(r"\s+", "", re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.DOTALL))
+
+
+def repair_divsqrt_handshake(sv: str) -> tuple[str, int]:
+    """Replace only the pinned faulty Calyx divider wrapper, leaving HardFloat intact.
+
+    The replacement accepts one request, latches output/flags on outValid, and
+    retains done until go falls. It is shared by simulation and synthesis.
+    Reapplying is safe; a changed upstream wrapper requires explicit review.
+    """
+    replacement = (
+        resources.files("oasis.backend")
+        .joinpath("templates", "divsqrt_handshake.sv")
+        .read_text()
+        .strip()
+    )
+    count = 0
+
+    def replace(match: re.Match) -> str:
+        nonlocal count
+        code = _sv_code(match.group())
+        if code == _sv_code(replacement):
+            return match.group()
+        if sha256(code.encode()).hexdigest() != _DIVSQRT_ORIGINAL_SHA:
+            raise ValueError(
+                "unrecognized std_divSqrtFN wrapper; review the pinned Calyx "
+                "divider handshake before generating RTL"
+            )
+        count += 1
+        return replacement
+
+    fixed = _DIVSQRT_RE.sub(replace, sv)
+    if re.search(r"\bmodule\s+std_divSqrtFN\b", sv) and not _DIVSQRT_RE.search(sv):
+        raise ValueError("unrecognized std_divSqrtFN module declaration")
+    return fixed, count
+
+
+def prepare_rtl(sv: str) -> tuple[str, str]:
+    """Apply the same correctness/compatibility repairs to both RTL outputs."""
+    fixed, dividers = repair_divsqrt_handshake(sv)
+    fixed, ports = drop_port_redeclarations(fixed)
+    return fixed, (
+        f"repaired {dividers} Calyx divider handshake(s)\n"
+        f"removed {ports} redundant port re-declaration(s) (wire X; for port X)\n"
+    )
 
 
 # Comments and strings are skipped so `module` inside them doesn't count as a keyword.
@@ -155,10 +245,19 @@ def sort_modules(sv: str) -> str:
     return header + "\n\n".join(text for _, text in sorted(modules)) + "\n"
 
 
-def vivado_compat_sv(in_path: Path, out_path: Path, ws: Workspace, log: Path) -> None:
-    """Fix-up stage: make Calyx's SystemVerilog acceptable to Vivado (xvlog / synthesis)."""
-    fixed, n = drop_port_redeclarations(in_path.read_text())
-    log.write_text(f"removed {n} redundant port re-declaration(s) (wire X; for port X)\n")
+def vivado_compat_sv(
+    in_path: Path,
+    out_path: Path,
+    ws: Workspace,
+    log: Path,
+    toolchain: Toolchain | None = None,
+) -> None:
+    """Legacy stage name: shared RTL correctness and Vivado compatibility repairs."""
+    try:
+        fixed, message = prepare_rtl(in_path.read_text())
+    except ValueError as e:
+        raise StageError("design", str(e), log) from e
+    log.write_text(message)
     out_path.write_text(fixed)
 
 
