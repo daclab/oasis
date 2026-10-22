@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 from oasis.config import Toolchain
+from oasis.frontend.approx_math import PASS_NAME, approximate_math
 from oasis.stages import StageError
 
 
@@ -33,7 +34,17 @@ def run_inprocess(mlir_text: str, passes: list[str], stage: str) -> str:
         ctx.allow_unregistered_dialects = False
         try:
             module = ir.Module.parse(mlir_text)
-            PassManager.parse(pipeline_string(passes)).run(module.operation)
+            pending = []
+            for name in passes:
+                if name == PASS_NAME:
+                    if pending:
+                        PassManager.parse(pipeline_string(pending)).run(module.operation)
+                        pending = []
+                    approximate_math(module)
+                else:
+                    pending.append(name)
+            if pending:
+                PassManager.parse(pipeline_string(pending)).run(module.operation)
         except Exception as e:  # MLIR raises MLIRError / ValueError with diagnostics
             raise StageError(stage, str(e)) from e
         return str(module)
@@ -41,6 +52,23 @@ def run_inprocess(mlir_text: str, passes: list[str], stage: str) -> str:
 
 def run_mlir_opt(mlir_text: str, passes: list[str], stage: str, tool: str, log: Path) -> str:
     """Run `passes` with an external mlir-opt binary."""
+    if PASS_NAME in passes:
+        # The custom rewrite uses the frontend wheel's IR API in both runners.
+        # External passes still run with the configured frontend binary.
+        index = passes.index(PASS_NAME)
+        before = passes[:index]
+        after = passes[index + 1 :]
+        logs = []
+        if before:
+            mlir_text = run_mlir_opt(mlir_text, before, stage, tool, log)
+            logs.append(log.read_text())
+        mlir_text = run_inprocess(mlir_text, [PASS_NAME], stage)
+        logs.append(f"frontend Python rewrite: {PASS_NAME}\n")
+        if after:
+            mlir_text = run_mlir_opt(mlir_text, after, stage, tool, log)
+            logs.append(log.read_text())
+        log.write_text("\n".join(logs))
+        return mlir_text
     cmd = [tool, f"--pass-pipeline={pipeline_string(passes)}"]
     proc = subprocess.run(cmd, input=mlir_text, capture_output=True, text=True, check=False)
     log.write_text(f"$ {' '.join(cmd)}\n\n{proc.stderr}")

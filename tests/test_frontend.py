@@ -49,7 +49,7 @@ def test_gemm_frontend_e2e(tmp_path):
     assert "memref.alloc" not in scf
 
 
-@pytest.mark.parametrize("bench", ["relu", "ffnn", "increment"])
+@pytest.mark.parametrize("bench", ["relu", "ffnn", "increment", "attention"])
 def test_ported_benchmarks_reach_handoff(bench, tmp_path):
     """From-Algorithm-to-RTL benchmarks lower to scf/memref/arith."""
     pytest.importorskip("torch_mlir")
