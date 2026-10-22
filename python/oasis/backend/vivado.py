@@ -11,7 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from oasis.backend.fixups import drop_port_redeclarations, sort_modules
+from oasis.backend.fixups import prepare_rtl, sort_modules
 from oasis.backend.testbench import fill_template
 from oasis.config import FpgaTarget, Toolchain
 from oasis.stages import StageError, run_tool
@@ -45,7 +45,7 @@ def generate_synth_sv(
 ) -> None:
     """Synthesis RTL: same Calyx program, without $readmemh/$writememh/final (calyx --synthesis).
 
-    Gets the same Vivado-compatibility fix-up as the simulation RTL, and a fixed module order
+    Gets the same correctness/compatibility repairs as simulation RTL, and a fixed module order
     (Calyx's order changes from run to run, and synthesis results depend on it).
     `disable_verify` drops Calyx's `$fatal` multiple-assignment checks (calyx
     --disable-verify), which Yosys's SystemVerilog frontend doesn't need; Vivado's synthesis
@@ -61,7 +61,13 @@ def generate_synth_sv(
         stdout_to_file=True,
         unlimited_stack=True,
     )
-    fixed, _ = drop_port_redeclarations(out_sv.read_text())
+    try:
+        fixed, message = prepare_rtl(out_sv.read_text())
+    except ValueError as e:
+        out_sv.unlink(missing_ok=True)
+        raise StageError("synth_rtl", str(e), log) from e
+    with log.open("a") as stream:
+        stream.write(message)
     out_sv.write_text(sort_modules(fixed))
 
 

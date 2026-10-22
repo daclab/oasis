@@ -17,6 +17,7 @@ oasis run gemm          same as `oasis compile gemm --sim --synth`
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 from pathlib import Path
 
@@ -116,7 +117,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
             if stage.fixup not in FIXUPS:
                 raise StageError(stage.name, f"unknown fixup '{stage.fixup}'")
             out_path = ws.dump_path(index, stage.name, stage.ext)
-            FIXUPS[stage.fixup](prev_path, out_path, ws, log)
+            FIXUPS[stage.fixup](prev_path, out_path, ws, log, toolchain=toolchain)
             prev_path = out_path
         else:
             raise StageError(stage.name, f"unknown stage kind '{stage.kind}'")
@@ -190,7 +191,8 @@ def cmd_tb(args: argparse.Namespace) -> int:
     for mem in memories:
         print(f"  {mem.name}: arg {mem.arg_index} ({mem.role}, {mem.shape}, {mem.width}-bit)")
     print(f"testbench: {sim_dir}/tb.sv   ({tc.fpga.clock_mhz:g} MHz clock)")
-    check = f"oasis check {bench.name} --size {bench.size}"
+    output_arg = f" --out {shlex.quote(str(ws.out))}"
+    check = f"oasis check {bench.name} --size {bench.size}{output_arg}"
     for name, script in sim_scripts.items():
         print(f"simulate ({name}): bash {script}    then: {check}")
     if not sim_scripts:
@@ -198,7 +200,7 @@ def cmd_tb(args: argparse.Namespace) -> int:
     if synth_script:
         print(
             f"synthesis ({tool}): bash {synth_script}    "
-            f"then: oasis report {bench.name} --size {bench.size} --synth-tool {tool}"
+            f"then: oasis report {bench.name} --size {bench.size} --synth-tool {tool}{output_arg}"
         )
         target = tc.fpga.yosys_family if tool == "yosys" else tc.fpga.part
         print(f"           top = {synth_top}, target = {target}")
