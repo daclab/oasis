@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use OASIS in your research, please cite this software."
+type: software
+title: "OASIS: Open Infrastructure for Automated Synthesis of AI Models to Hardware"
+authors:
+  - family-names: Ahmed
+    given-names: Md Rubel
+    affiliation: Louisiana Tech University
+    email: mahmed@latech.edu
+  - family-names: Ewetz
+    given-names: Rickard F
+    affiliation: University of Florida
+    email: rewetz@ufl.edu
+  - family-names: Zheng
+    given-names: Hao
+    affiliation: University of Central Florida
+    email: hao.zheng@ucf.edu
+version: 0.3.1
+date-released: "2026-11-23"
+repository-code: "https://github.com/daclab/oasis"
+url: "https://github.com/daclab/oasis"
+license: MIT

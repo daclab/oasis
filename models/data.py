@@ -22,7 +22,7 @@ _CNN = {"dtype": "f32", "weights": "args", "prepare": ["randomize_bn", "fold_bn"
 
 # Transformers (WIP): weights as memories, like ffnn.
 _TRANSFORMER = {"dtype": "f32", "weights": "args", "status": "wip"}
-_SOFTMAX = "softmax lowers to math.exp (no hardware form yet; needs oasis-approx-math)"
+_SOFTMAX = "softmax uses the scalar f32 oasis-approx-math exponential approximation"
 _LAYERNORM = "LayerNorm needs a runtime 1/sqrt (math.rsqrt) of the input's variance"
 
 BENCHMARKS = {
@@ -77,7 +77,11 @@ BENCHMARKS = {
     "attention": {
         **_TRANSFORMER,
         "model": "transformers/transformer.py:attention",
-        "note": _SOFTMAX,
+        "status": "pass",
+        "note": (
+            f"{_SOFTMAX}; small: v0 Verilator 5.052 PASS 2026-10-21; "
+            "medium and synthesis unverified"
+        ),
         "inputs": {"small": [(1, 16, 32)], "medium": [(1, 64, 128)]},
         "init": {
             "small": {"embed_dim": 32, "num_heads": 4},
@@ -158,5 +162,17 @@ BENCHMARKS = {
             "small": {"channels": 16, "classes": 10},
             "medium": {"channels": 512, "classes": 1000},
         },
+    },
+    # ---- Debug: minimal reproductions of attention's wrong softmax row maximum ----
+    # Inputs are uniform in [-1, 1), so rows mix positive and negative values.
+    "rowmax_idx": {
+        "model": "debug/rowmax.py:rowmax_idx",
+        "dtype": "f32",
+        "inputs": {"small": [(4, 16)]},
+    },
+    "rowmax": {
+        "model": "debug/rowmax.py:rowmax",
+        "dtype": "f32",
+        "inputs": {"small": [(4, 16)]},
     },
 }

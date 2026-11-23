@@ -55,18 +55,18 @@ def test_compare_int_is_bit_exact():
 
 
 @pytest.mark.parametrize(
-    "name, out_shape",
+    "name, out_shape, status",
     [
-        ("k3mm", (16, 22)),
-        ("attention", (1, 16, 32)),
-        ("transformer_block", (1, 16, 32)),
-        ("tiny_llm", (1, 16, 64)),
+        ("k3mm", (16, 22), "wip"),
+        ("attention", (1, 16, 32), "pass"),
+        ("transformer_block", (1, 16, 32), "wip"),
+        ("tiny_llm", (1, 16, 64), "wip"),
     ],
 )
-def test_wip_benchmarks_run_in_pytorch(name, out_shape):
-    """The WIP benchmarks build, get inputs and produce a golden output of the right shape."""
+def test_benchmarks_run_in_pytorch(name, out_shape, status):
+    """Benchmarks retain their status and produce finite outputs of the right shape."""
     bench = load_benchmark(name)
-    assert bench.status == "wip" and bench.note
+    assert bench.status == status and bench.note
     out = golden(bench.build(), make_inputs(bench))
     assert out.shape == out_shape and np.isfinite(out).all()
 

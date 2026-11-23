@@ -2,36 +2,17 @@
 
 **Open Infrastructure for Automated Synthesis of AI Models to Hardware**
 
-OASIS is an open-source compiler that lowers PyTorch models to synthesizable RTL for FPGAs and ASICs. It is built on [MLIR](https://mlir.llvm.org/) and [CIRCT](https://circt.llvm.org/), and it keeps the whole flow inside a multi-level IR stack instead of handing generated C/C++ to a high-level synthesis (HLS) tool. Optimization intent such as tiling, memory layout, parallelism and precision is carried as explicit IR structure and attributes, so later stages don't have to re-infer it from general-purpose code.
+OASIS is an open-source compiler that lowers PyTorch models to synthesizable RTL for FPGAs and ASICs. It is built on [MLIR](https://mlir.llvm.org/) and [CIRCT](https://circt.llvm.org/), and it keeps the whole flow inside a multi-level IR stack instead of handing generated C/C++ to a high-level synthesis (HLS) tool. The project aims to give users with little or no hardware optimization experience a simple, push-button workflow for turning AI models into optimized hardware accelerators.
 
-> **Status: early development (v0.3.0).** GEMM, ReLU, FFNN, and K3MM small-size RTL simulations passed against PyTorch using Verilator 5.052 on 2026-10-09. Yosys is the default synthesis backend and exports a gate-level netlist; Vivado is selectable with `--synth-tool vivado`. Netlist simulation remains pending. Interfaces and pass pipelines will change.
+> **Status: early development (v0.3.1).** GEMM, ReLU, FFNN, and K3MM small-size RTL simulations passed against PyTorch using Verilator 5.052 on 2026-10-09. Yosys is the default synthesis backend and exports a gate-level netlist; Vivado is selectable with `--synth-tool vivado`. Netlist simulation remains pending. Interfaces and pass pipelines will change.
 
 ---
 
 ## Pipeline
 
-```
- PyTorch model
-      │  torch.export + torch-mlir FX importer
-      ▼
- torch dialect ──▶ linalg-on-tensors
-      │  one-shot bufferization, results → out-params
-      ▼
- linalg on memrefs ──▶ affine loops ──▶ scf + memref + arith
-      │
- ═════╪═════  handoff: textual .mlir on disk  ═════════════
-      │
-      ▼  oasis-opt (OASIS passes)
- scf + memref + arith, legalized for hardware
-      │
-      ▼  CIRCT
- scf ──▶ Calyx ──▶ native Calyx (.futil)
-      │  Calyx compiler
-      ▼
- SystemVerilog ──▶ Verilator / Vivado xsim simulation ──▶ check vs. PyTorch (bit-exact for integers)
-              └──▶ Vivado synthesis       ──▶ gate-level netlist, resource utilization, timing
-              └──▶ Yosys synthesis        ──▶ gate-level netlist, resource utilization
-```
+![OASIS compiler flow from AI frameworks through tensor IR, MLIR optimization, hardware-aware lowering, CIRCT, and RTL to FPGA and ASIC hardware, with verification and optimization feedback.](docs/images/oasis-flow.png)
+
+Research overview from [DAC Lab](https://daclab.github.io/research.html). The figure shows the broader research vision; the current implementation accepts PyTorch models.
 
 OASIS exports the Yosys netlist as `synth/netlist.v`. The current Vivado script generates a netlist internally and saves utilization and timing reports; netlist export is not yet enabled.
 
@@ -173,26 +154,21 @@ All outputs of a run go to `out/<benchmark>_<size>/`:
 
 ## Benchmarks
 
-Ordered by approximate model structure complexity, from scalar/elementwise kernels to full transformer models; this is not a runtime or hardware-cost ranking.
+Passing benchmarks are listed first, followed by work in progress. Each group is ordered by approximate model structure complexity, rather than runtime or hardware cost.
 
 | Benchmark | Data type | Description | Status |
 |---|---|---|---|
-| `increment` | i32 | a + 1 | **PASS** |
 | `relu` | f32 | ReLU(x + y), 1×3×10×10 | **PASS** |
-| `gelu` | f32 | GELU(x + y) | **WIP** |
 | `gemm` | f32 | `C = A @ B`; 32×32 (`small`), PolyBench MEDIUM (`medium`) | **PASS** |
 | `k3mm` | f32 | PolyBench 3mm: `G = (A @ B) @ (C @ D)`; `small` 16–24, PolyBench MEDIUM (`medium`) | **PASS** |
 | `ffnn` | f32 | Linear 64→48, ReLU, Linear 48→4; weights as memories | **PASS** |
-| `resnet_head` | f32 | Global average pooling and fully connected classifier | **WIP** |
-| `resnet_stem` | f32 | Convolution, BatchNorm, ReLU, and max pooling | **WIP** |
-| `resnet_block` | f32 | Two convolutions with an identity shortcut | **WIP** |
-| `resnet_down` | f32 | Downsampling residual block with a projection shortcut | **WIP** |
+| `attention` | f32 | Multi-head self-attention (from Stream-HLS); weights as memories | **PASS** |
+| `gelu` | f32 | GELU(x + y) | **WIP** |
 | `resnet18` | f32 | Full ResNet-18; 32×32 (`small`) or 224×224 (`large`) input images | **WIP** |
-| `attention` | f32 | Multi-head self-attention (from Stream-HLS); weights as memories | **WIP** |
 | `transformer_block` | f32 | LayerNorm + attention + LayerNorm + feed-forward (ReLU), residuals | **WIP** |
 | `tiny_llm` | f32 | Decoder-only LLM: token/position embeddings, 2 causal blocks, LM head; input = token ids | **WIP** |
 
-**PASS** refers to small-size RTL simulation checked against PyTorch; **WIP** denotes work in progress. Recorded v0 pipeline results used Verilator 5.052: GEMM, ReLU, FFNN, and K3MM on 2026-10-09; increment on 2026-10-06. Synthesized-netlist simulation remains pending.
+**PASS** refers to small-size RTL simulation checked against PyTorch; **WIP** denotes work in progress. Recorded v0 pipeline results used Verilator 5.052: GEMM, ReLU, FFNN, and K3MM on 2026-10-09; small attention on 2026-10-21 (0/512 mismatches). Medium attention and attention synthesis remain unverified. Synthesized-netlist simulation remains pending.
 
 ### Adding a benchmark
 
@@ -233,7 +209,6 @@ OASIS/
 │   ├── data.py                   benchmark registry: model, dtype, input shapes
 │   ├── polybench/gemm.py
 │   ├── nn/                       relu.py, gelu.py, ffnn.py
-│   ├── misc/increment.py
 │   └── cnn/                      resnet18.py, resnet_blocks.py
 ├── config/
 │   ├── toolchain.toml            default tools, FPGA target, simulation settings
